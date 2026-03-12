@@ -1,0 +1,9 @@
+services:
+  - type: web
+    name: flautas-bot
+    runtime: python
+    buildCommand: pip install -r requirements.txt
+    startCommand: python telegram_bot.py
+    envVars:
+      - key: BOT_TOKEN
+        sync: false
