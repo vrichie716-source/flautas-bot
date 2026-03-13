@@ -6189,7 +6189,7 @@ DT_TOOLS["dtfrontend"] = [
 # ── WordPress Tools ──
 DT_TOOLS["dtwordpress"] = [
     ("WordPress.org — Official Site", "https://wordpress.org/"),
-    ("Starter Templates — Theme Templates", "https://developer.starter.developer.starter.developer/starter"),
+    ("Developer Resources — WordPress.org", "https://developer.wordpress.org/"),
 ]
 
 # ── Regex Tools ──
