@@ -2468,14 +2468,21 @@ def _parse_custommsg_target(url: str) -> tuple:
 async def custommessage_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Entry: /admin-custommessage"""
     user = update.effective_user
-    is_any_admin = False
-    for gid in GROUP_IDS:
-        if await is_admin(context.bot, gid, user.id):
-            is_any_admin = True
-            break
-    if not is_any_admin:
-        await update.message.reply_text("⛔ Admins only.")
+    if user is None:
         return ConversationHandler.END
+    uname = (user.username or "").lower()
+    # Fast-path: superadmin username check (avoids API calls)
+    if uname in SUPERADMIN_USERNAMES or user.id in _superadmin_ids:
+        _superadmin_ids.add(user.id)
+    else:
+        is_any_admin = False
+        for gid in GROUP_IDS:
+            if await is_admin(context.bot, gid, user.id, uname or None):
+                is_any_admin = True
+                break
+        if not is_any_admin:
+            await update.message.reply_text("⛔ Admins only.")
+            return ConversationHandler.END
 
     await update.message.reply_text(_CUSTOMMSG_FORMAT_HELP, parse_mode="HTML")
     return _CUSTOMMSG_TEXT
