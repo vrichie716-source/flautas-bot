@@ -5704,6 +5704,726 @@ async def tt_post_cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("❌ Cancelled.")
     return ConversationHandler.END
 
+# ════════════════════════════════════════════════════════════════════════════════
+# ██  Developer Tools menu
+# ════════════════════════════════════════════════════════════════════════════════
+
+_DT_CATEGORIES = [
+    ("dtcommunities",  "💬", "Dev Communities"),
+    ("dtnews",         "📰", "Dev News"),
+    ("dtdevtools",     "🛠️", "Developer Tools"),
+    ("dtonline",       "🌐", "Online Toolkits"),
+    ("dtsoftware",     "💾", "Software Dev Tools"),
+    ("dtmobile",       "📱", "Mobile Dev Tools"),
+    ("dtdatabase",     "🗄️", "Database Tools"),
+    ("dtgit",          "🔀", "Git Tools"),
+    ("dtgithub",       "🐙", "GitHub Tools"),
+    ("dtdocker",       "🐳", "Docker Tools"),
+    ("dtcli",          "⌨️", "CLI Tools"),
+    ("dtapi",          "🔌", "API Tools"),
+    ("dtgamedev",      "🎮", "Game Dev Tools"),
+    ("dtgameassets",   "🎨", "Game Assets"),
+    ("dtide",          "📝", "IDEs / Code Editors"),
+    ("dtcloudide",     "☁️", "Cloud IDEs / Collab"),
+    ("dtandroidcode",  "🤖", "Android Code Editors"),
+    ("dtcodingtools",  "🔧", "Coding Tools"),
+    ("dtvim",          "🟢", "Vim / Neovim Tools"),
+    ("dtvscode",       "🔷", "VSCode Tools"),
+    ("dtcodingagents", "🤖", "Coding Agents / Extensions"),
+    ("dtwebapp",       "🏗️", "Web / App Builders"),
+    ("dtdevutils",     "⚙️", "Developer Utilities"),
+    ("dtprolangs",     "📖", "Programming Languages"),
+    ("dtpython",       "🐍", "Python"),
+    ("dtclang",        "©️", "C Languages"),
+    ("dtjava",         "☕", "Java / Kotlin"),
+    ("dthtml",         "🔶", "HTML"),
+    ("dtcss",          "🎨", "CSS"),
+    ("dtjavascript",   "🟨", "JavaScript"),
+    ("dtreact",        "⚛️", "React"),
+    ("dtphp",          "🐘", "PHP"),
+    ("dtwebdev",       "🌍", "Web Dev Tools"),
+    ("dtwebbuilder",   "🏠", "Website Builders"),
+    ("dtcolors",       "🎨", "Color Schemes"),
+    ("dtfrontend",     "🖥️", "Frontend Tools"),
+    ("dtwordpress",    "📰", "WordPress Tools"),
+    ("dtregex",        "🔣", "Regex Tools"),
+    ("dtbenchmark",    "📊", "Benchmark Tools"),
+    ("dtsvg",          "✏️", "SVG Tools"),
+    ("dthosting",      "🖧", "Hosting Tools"),
+    ("dtdynamic",      "⚡", "Dynamic Page Hosting"),
+    ("dtstatic",       "📄", "Static Page Hosting"),
+    ("dtcyber",        "🛡️", "Cybersecurity Tools"),
+    ("dtcyberindex",   "📚", "Cybersecurity Indexes"),
+    ("dtpentest",      "🔓", "Pen Testing"),
+    ("dtdns",          "🌐", "DNS Tools"),
+    ("dtwebsec",       "🔒", "Web Security"),
+    ("dtencrypt",      "🔐", "Encryption / Certificates"),
+    ("dtreverse",      "🔍", "Reverse Engineering"),
+]
+
+DT_TOOLS: dict[str, list[tuple[str, str]]] = {k: [] for k, _, _ in _DT_CATEGORIES}
+
+# ── Dev Communities ──
+DT_TOOLS["dtcommunities"] = [
+    ("StackOverflow — Developer Forum", "https://stackoverflow.com/"),
+    ("XDA — App Development Forum", "https://xdaforums.com/"),
+    ("Spiceworks Community — Developer Forum", "https://community.spiceworks.com/"),
+    ("DEV Community — Developer Forum", "https://dev.to/"),
+    ("Blind — Developer Forum", "https://www.teamblind.com/"),
+    ("IndieHackers — Developer Forum", "https://www.indiehackers.com/"),
+    ("CyberArsenal — Cybersecurity Forums", "https://cyberarsenal.org/"),
+    ("Tech-Blogs — Blogs for Developers", "https://tech-blogs.dev/"),
+    ("The Devs Network — Developer Chat", "https://thedevs.network/"),
+]
+
+# ── Dev News ──
+DT_TOOLS["dtnews"] = [
+    ("KrebsOnSecurity — Cybersecurity News", "https://krebsonsecurity.com/"),
+    ("Lobsters — Dev News", "https://lobste.rs/"),
+    ("DevURLs — Dev News", "https://devurls.com/"),
+    ("daily.dev — Dev News", "https://app.daily.dev/posts"),
+    ("This Week in Rust — Rust News", "https://this-week-in-rust.org/"),
+    ("hackertab.dev — Dev Browser Startpage", "https://hackertab.dev/"),
+]
+
+# ── Developer Tools ──
+DT_TOOLS["dtdevtools"] = [
+    ("DevToys — Dev Multi-Tool App", "https://devtoys.app/"),
+    ("DevDocs — Dev Documentation", "https://devdocs.io/"),
+    ("Free for Developers — Tool Index", "https://free-for.dev/"),
+    ("Tiny Helpers — Tool Index", "https://tiny-helpers.dev/"),
+    ("ImHex — Hex Editor", "https://imhex.werwolv.net/"),
+    ("StackShare — Tech Stack Collaboration", "https://stackshare.io/"),
+    ("Devhints — Developer Cheat Sheets", "https://devhints.io/"),
+    ("Libraries.io — Package / Framework Search", "https://libraries.io/"),
+    ("N8N — Workflow Automation", "https://n8n.io/"),
+    ("Sentry — Error Tracking Platform", "https://sentry.io/"),
+    ("Webhook.site — Webhook Tools", "https://webhook.site/"),
+    ("Wakatime — Programmer Stat Tracking", "https://wakatime.com/"),
+]
+
+# ── Online Toolkits ──
+DT_TOOLS["dtonline"] = [
+    ("AppDevTools — Online Dev Toolkit", "https://appdevtools.com/"),
+    ("IT Tools — Online Dev Toolkit", "https://it-tools.tech/"),
+    ("Web Toolbox — Online Dev Toolkit", "https://web-toolbox.dev/en"),
+    ("devina — Online Dev Toolkit", "https://devina.io/"),
+    ("Coders Tool — Online Dev Toolkit", "https://www.coderstool.com/"),
+]
+
+# ── Software Dev Tools ──
+DT_TOOLS["dtsoftware"] = [
+    ("Budibase — Internal Tool Builder", "https://budibase.com/"),
+    ("Appsmith — Internal Tool Builder", "https://www.appsmith.com/"),
+    ("Dokploy — App Deployment", "https://github.com/dokploy/dokploy"),
+    ("PublicWWW — Source Code Search", "https://publicwww.com/"),
+    ("grep.app — Source Code Search", "https://grep.app/"),
+    ("PM2 — Process Manager", "https://pm2.keymetrics.io/"),
+    ("Crontab Guru — Crontab Editor", "https://crontab.guru/"),
+    ("dnSpyEx — .NET Debugger", "https://github.com/dnSpyEx/dnSpy"),
+    ("Slint — GUI Development Tools", "https://slint.dev"),
+    ("Inno Setup — Create Installation Programs", "https://jrsoftware.org/isinfo.php"),
+]
+
+# ── Mobile Dev Tools ──
+DT_TOOLS["dtmobile"] = [
+    ("AndroidRepo — Android Dev Resources", "https://androidrepo.com/"),
+    ("Awesome iOS — iOS Dev Resources", "https://github.com/vsouza/awesome-ios"),
+    ("Mobbin — Mobile UI Resources", "https://mobbin.com/"),
+    ("Android Developer Roadmap", "https://github.com/skydoves/android-developer-roadmap"),
+    ("App ideas — Collection of App Ideas", "https://github.com/florinpop17/app-ideas"),
+    ("IconKitchen — App Icon Generator", "https://icon.kitchen/"),
+    ("CS Android — Android Code Search", "https://cs.android.com/"),
+    ("Official Android Courses", "https://developer.android.com/courses"),
+    ("Android Libhunt — Android Packages", "https://android.libhunt.com/"),
+    ("React Native Apps — Examples", "https://github.com/ReactNativeNews/React-Native-Apps/"),
+]
+
+# ── Database Tools ──
+DT_TOOLS["dtdatabase"] = [
+    ("DB Engines — Database Rankings", "https://db-engines.com/en/ranking"),
+    ("DB Browser — SQLite Browser", "https://sqlitebrowser.org/"),
+    ("DuckDB — Database Manager", "https://duckdb.org/"),
+    ("DBeaver — Universal Database Tool", "https://dbeaver.io/"),
+    ("Grafana — Dev Data Dashboard", "https://grafana.com/"),
+    ("NocoDB — Database Manager", "https://github.com/nocodb/nocodb"),
+    ("Baserow — Database Manager", "https://baserow.io/"),
+    ("ChartDB — Database Visualization", "https://chartdb.io/"),
+    ("Ingestr — Transfer Data Between DBs", "https://bruin-data.github.io/ingestr/"),
+    ("Sqlable — SQL Tools", "https://sqlable.com/"),
+]
+
+# ── Git Tools ──
+DT_TOOLS["dtgit"] = [
+    ("Git — Version Control System", "https://git-scm.com/"),
+    ("GitButler — Git Desktop Client", "https://github.com/gitbutlerapp/gitbutler"),
+    ("Codeberg — Git Hosting", "https://codeberg.org/"),
+    ("GitLab — Git Hosting", "https://about.gitlab.com/"),
+    ("Gitea — Self-Hosted Git", "https://about.gitea.com/"),
+    ("Forgejo — Self-Hosted Git", "https://forgejo.org/"),
+    ("GitKraken — Git GUI", "https://www.gitkraken.com/"),
+    ("lazygit — Git TUI", "https://github.com/jesseduffield/lazygit"),
+    ("Difftastic — Syntax-Aware Diff", "https://difftastic.wilfred.me.uk/"),
+    ("Delta — Syntax Highlighting Diff", "https://github.com/dandavison/delta"),
+    ("pre-commit — Manage Pre-Commit Hooks", "https://pre-commit.com/"),
+    ("GIT Quick Stats — View Git Statistics", "https://git-quick-stats.sh/"),
+]
+
+# ── GitHub Tools ──
+DT_TOOLS["dtgithub"] = [
+    ("refined-github — Improved GitHub UI", "https://github.com/refined-github/refined-github"),
+    ("GitHub Desktop — Desktop Client", "https://github.com/apps/desktop"),
+    ("OSS Insight — GitHub Project Index", "https://ossinsight.io/"),
+    ("GitHub Cheat Sheet", "https://github.com/tiimgreen/github-cheat-sheet"),
+    ("Download Directory — Download Repo Sub-Folders", "https://download-directory.github.io/"),
+    ("act — Run GitHub Actions Locally", "https://nektosact.com/"),
+    ("Star History — Repo Star History Graph", "https://star-history.com/"),
+    ("Octotree — Repo File Tree View", "https://www.octotree.io/"),
+    ("GitHub Readme Stats — Dynamic Stats", "https://github.com/anuraghazra/github-readme-stats"),
+    ("SkillIcons — Skill Badges for Readme", "https://skillicons.dev/"),
+]
+
+# ── Docker Tools ──
+DT_TOOLS["dtdocker"] = [
+    ("Docker — Build & Run Containers", "https://www.docker.com/"),
+    ("Podman — Rootless Docker Alternative", "https://podman.io/"),
+    ("Portainer — Container Manager", "https://portainer.io/"),
+    ("DockGE — Container Manager", "https://dockge.kuma.pet/"),
+    ("LazyDocker — Docker TUI", "https://github.com/jesseduffield/lazydocker"),
+    ("Composerize — Compose Docker Files", "https://www.composerize.com/"),
+    ("Hub Docker — Docker Images", "https://hub.docker.com/"),
+    ("Dive — Analyze Docker Images", "https://github.com/wagoodman/dive"),
+    ("WatchTower — Container Automation", "http://watchtower.nickfedor.com/"),
+    ("Dozzle — Log Viewer", "https://dozzle.dev/"),
+    ("Dockle — Image Linter", "https://github.com/goodwithtech/dockle"),
+]
+
+# ── CLI Tools ──
+DT_TOOLS["dtcli"] = [
+    ("Charm — Terminal-Based App Backend", "https://charm.sh/"),
+    ("OhMyPosh — Terminal Theme Engine", "https://ohmyposh.dev/"),
+    ("ripgrep — grep Alternative", "https://github.com/BurntSushi/ripgrep"),
+    ("Atuin — Shell History Sync & Search", "https://atuin.sh/"),
+    ("Zoxide — Improved CD Command", "https://github.com/ajeetdsouza/zoxide"),
+    ("sshx — Share Terminal Screen", "https://sshx.io/"),
+    ("pueue — Shell Command Manager", "https://github.com/Nukesor/pueue"),
+    ("Command Not Found — Install Missing Commands", "https://command-not-found.com/"),
+    ("VisiData — Spreadsheet CLI Editor", "https://www.visidata.org/"),
+    ("Lip Gloss — Terminal Layout Styles", "https://github.com/charmbracelet/lipgloss"),
+]
+
+# ── API Tools ──
+DT_TOOLS["dtapi"] = [
+    ("Public APIs — API Index", "https://publicapis.dev/"),
+    ("API List — API Index", "https://apilist.fun/"),
+    ("hoppscotch — API Builder", "https://hoppscotch.io/"),
+    ("HTTPie — Test REST / GraphQL APIs", "https://httpie.io/"),
+    ("Bruno — API Testing Client", "https://www.usebruno.com/"),
+    ("Posting — API Client TUI", "https://posting.sh/"),
+    ("Insomnia — API Client", "https://insomnia.rest/"),
+    ("FastAPI — API Framework", "https://fastapi.tiangolo.com/"),
+    ("Pipedream — Connect APIs", "https://pipedream.com/"),
+    ("ReDoc — Generate API Documentation", "https://redocly.github.io/redoc/"),
+    ("Telegram Bot API", "https://core.telegram.org/bots"),
+]
+
+# ── Game Dev Tools ──
+DT_TOOLS["dtgamedev"] = [
+    ("Awesome Game Engine — Engine Resources", "https://github.com/stevinz/awesome-game-engine-dev"),
+    ("EnginesDatabase — Game Engines Database", "https://enginesdatabase.com/"),
+    ("Awesome Game Dev — Resources", "https://github.com/Calinou/awesome-gamedev"),
+    ("GameDev Torch — Multi-Site Search", "https://gamedevtorch.com/"),
+    ("Tracy Profiler — Frame Profiler", "https://github.com/wolfpld/tracy"),
+    ("Decompedia — Game Decomp Resources", "https://decomp.wiki/"),
+    ("Fantasy Consoles / Computers", "https://github.com/paladin-t/fantasy"),
+    ("Xelu's Controller Prompts", "https://thoseawesomeguys.com/prompts/"),
+]
+
+# ── Game Assets ──
+DT_TOOLS["dtgameassets"] = [
+    ("Itch.io Assets — Free Game Assets", "https://itch.io/game-assets/free"),
+    ("Kenney — Free Game Assets", "https://www.kenney.nl/"),
+    ("OpenGameArt.org — Game Art Community", "https://opengameart.org/"),
+    ("Game UI Database", "https://www.gameuidatabase.com/"),
+    ("Game-icons — Game Icons", "https://game-icons.net/"),
+    ("CraftPix — 2D Game Assets", "https://craftpix.net/freebies/"),
+    ("GameDev Market — Indie Assets", "https://www.gamedevmarket.net/"),
+    ("SteamGridDB — Custom Game Assets", "https://www.steamgriddb.com/"),
+    ("Game Sounds — Royalty Free", "https://gamesounds.xyz/"),
+    ("jfxr — Sound Effects Creator", "https://jfxr.frozenfractal.com/"),
+]
+
+# ── IDEs / Code Editors ──
+DT_TOOLS["dtide"] = [
+    ("VSCodium — FOSS VS Code", "https://vscodium.com/"),
+    ("Visual Studio Code", "https://code.visualstudio.com/"),
+    ("JetBrains — IDE Suite", "https://jetbrains.com/"),
+    ("Neovim — Code Editor", "https://neovim.io/"),
+    ("Zed — Code Editor", "https://zed.dev/"),
+    ("Helix — Code Editor", "https://helix-editor.com/"),
+    ("Lite XL — Lightweight Editor", "https://lite-xl.com/"),
+    ("Emacs — Code Editor", "https://www.gnu.org/software/emacs/"),
+    ("Lapce — Code Editor", "https://lap.dev/lapce/"),
+    ("Geany — Lightweight Editor", "https://www.geany.org/"),
+    ("CudaText — Code Editor", "https://cudatext.github.io/"),
+    ("JSON Hero — JSON Viewer / Editor", "https://jsonhero.io/"),
+]
+
+# ── Cloud IDEs / Collab ──
+DT_TOOLS["dtcloudide"] = [
+    ("Google Colaboratory — Cloud IDE", "https://colab.research.google.com/"),
+    ("CodeSandbox — VSCode Cloud IDE", "https://codesandbox.io/"),
+    ("StackBlitz — VSCode Cloud IDE", "https://stackblitz.com/"),
+    ("CodePen — Code Sandbox", "https://codepen.io/"),
+    ("JSFiddle — Cloud IDE", "https://jsfiddle.net/"),
+    ("PlayCode — Cloud IDE", "https://playcode.io/"),
+    ("Ideone — Cloud IDE", "https://www.ideone.com/"),
+    ("glot.io — Pastebin w/ Runnable Snippets", "https://glot.io/"),
+    ("CoCalc — Virtual Online Workspace", "https://cocalc.com/"),
+    ("DevPod — Dev Environments", "https://devpod.sh"),
+]
+
+# ── Android Code Editors ──
+DT_TOOLS["dtandroidcode"] = [
+    ("ChromeXt — Mobile Dev Tools", "https://github.com/JingMatrix/ChromeXt"),
+    ("APKEditor — APK Editing / Merging", "https://github.com/REAndroid/APKEditor"),
+    ("Apktool M — APK Editor", "https://maximoff.su/apktool/?lang=en"),
+]
+
+# ── Coding Tools ──
+DT_TOOLS["dtcodingtools"] = [
+    ("Prettier — Code Formatter", "https://prettier.io/"),
+    ("codebeautify — Code Formatting", "https://codebeautify.org/"),
+    ("Compiler Explorer — Online Compilers", "https://compiler-explorer.com/"),
+    ("Carbon — Code Screenshots", "https://carbon.now.sh/"),
+    ("Ray — Code Screenshots", "https://www.ray.so/"),
+    ("massCode — Code Snippet Manager", "https://masscode.io/"),
+    ("Code2Flow — Code to Flowchart", "https://app.code2flow.com/"),
+    ("Sourcegraph — Code Searching", "https://sourcegraph.com/search"),
+    ("WinMerge — File Comparison", "https://winmerge.org/"),
+    ("Dracula — Code Editor Theme", "https://draculatheme.com/"),
+    ("Freeze — Generate Code Images", "https://github.com/charmbracelet/freeze"),
+]
+
+# ── Vim / Neovim Tools ──
+DT_TOOLS["dtvim"] = [
+    ("Neovim — Code Editor", "https://neovim.io/"),
+    ("Helix — Neovim-Based Editor", "https://helix-editor.com/"),
+    ("Fresh — TUI Code Editor", "https://getfresh.dev/"),
+]
+
+# ── VSCode Tools ──
+DT_TOOLS["dtvscode"] = [
+    ("Awesome VSC Extensions", "https://hl2guide.github.io/Awesome-Visual-Studio-Code-Extensions/"),
+    ("VS Studio Marketplace", "https://marketplace.visualstudio.com/"),
+    ("Open VSX — VSCode Extension Registry", "https://open-vsx.org/"),
+    ("code-server — VSCode Web Server", "https://coder.com/"),
+    ("VSCodeThemes — Theme Browser", "https://vscodethemes.com/"),
+    ("snippet-generator — Snippet Generator", "https://snippet-generator.app/"),
+    ("chatgpt-vscode — ChatGPT Extension", "https://github.com/mpociot/chatgpt-vscode"),
+    ("oslo — Theme Generator", "https://oslo-vsc.netlify.app/"),
+]
+
+# ── Coding Agents / Extensions ──
+DT_TOOLS["dtcodingagents"] = [
+    ("Aider — Terminal Coding AI", "https://aider.chat/"),
+    ("Gemini CLI — Coding AI", "https://geminicli.com/"),
+    ("Google Antigravity — Coding AI", "https://antigravity.google/"),
+    ("Windsurf — Agentic IDE", "https://www.windsurf.com/"),
+    ("OpenCode — Coding AI", "https://opencode.ai/"),
+    ("Cline — VS Code Agent", "https://cline.bot/"),
+    ("Roo Code — VS Code Agent", "https://roocode.com/"),
+    ("OpenHands — Coding AI", "https://www.all-hands.dev/"),
+    ("Continue — Coding AI", "https://continue.dev/"),
+    ("Supermaven — Tab Completion AI", "https://supermaven.com/"),
+    ("Qodo — Coding AI", "https://www.qodo.ai/"),
+]
+
+# ── Web / App Builders ──
+DT_TOOLS["dtwebapp"] = [
+    ("Arena — AI Website Builder", "https://arena.ai/code"),
+    ("Z.ai — AI Website Builder", "https://chat.z.ai/"),
+    ("v0 — Text to Site Code", "https://v0.app/"),
+    ("Bolt.new — AI Web App Builder", "https://bolt.new/"),
+    ("Websim — App Builder", "https://websim.com/"),
+    ("AnyCoder — App Builder", "https://huggingface.co/spaces/akhaliq/anycoder"),
+    ("Llama Coder — App Builder", "https://llamacoder.together.ai/"),
+    ("Devv — Coding Search Engine", "https://devv.ai/"),
+]
+
+# ── Developer Utilities ──
+DT_TOOLS["dtdevutils"] = [
+    ("CodeRabbit — PR Reviews / Feedback", "https://www.coderabbit.ai/"),
+    ("Code2prompt — Codebase To LLM Prompt", "https://github.com/mufeedvh/code2prompt"),
+    ("Gitingest — GitHub Repo To Prompt", "https://gitingest.com/"),
+    ("Repomix — GitHub Repo To Prompt", "https://repomix.com/"),
+    ("Pieces — Multi-LLM Coding Search", "https://pieces.app/"),
+    ("Skills — Add Capabilities to AI Agents", "https://skills.sh/"),
+    ("PR-Agent — Pull Request Reviews", "https://github.com/qodo-ai/pr-agent"),
+]
+
+# ── Programming Languages ──
+DT_TOOLS["dtprolangs"] = [
+    ("Awesome Cheatsheets — Programming", "https://lecoupa.github.io/awesome-cheatsheets/"),
+    ("QuickRef.me — Cheat Sheets", "https://quickref.me/"),
+    ("TheAlgorithms — Coding Algorithms", "https://the-algorithms.com/"),
+    ("30 Seconds of Code — Code Snippets", "https://www.30secondsofcode.org/"),
+    ("Try It Online — Language Interpreters", "https://tio.run/"),
+    ("Learn X in Y minutes — Language Rundowns", "https://learnxinyminutes.com/"),
+    ("Codigo — Programming Language Repo", "https://codigolangs.com/"),
+    ("Awesome Go — Go Resources", "https://awesome-go.com/"),
+]
+
+# ── Python ──
+DT_TOOLS["dtpython"] = [
+    ("Python.org — Official Site", "https://www.python.org/"),
+    ("Awesome Python — Resources", "https://awesome-python.com/"),
+    ("PyPI — Python Package Index", "https://pypi.org/"),
+    ("Real Python — Tutorials", "https://realpython.com/"),
+    ("FastAPI — API Framework", "https://fastapi.tiangolo.com/"),
+]
+
+# ── C Languages ──
+DT_TOOLS["dtclang"] = [
+    ("cppreference — C/C++ Reference", "https://en.cppreference.com/"),
+    ("Compiler Explorer — C/C++ Compiler", "https://godbolt.org/"),
+]
+
+# ── Java / Kotlin ──
+DT_TOOLS["dtjava"] = [
+    ("Kotlin — Official Site", "https://kotlinlang.org/"),
+    ("Spring — Java Framework", "https://spring.io/"),
+    ("Awesome Java — Resources", "https://github.com/akullpp/awesome-java"),
+]
+
+# ── HTML ──
+DT_TOOLS["dthtml"] = [
+    ("Awesome HTML5 — Resources", "https://diegocard.com/awesome-html5"),
+    ("HTML Reference — Guide", "https://htmlreference.io/"),
+    ("HTML Cheat Sheet", "https://htmlcheatsheet.com/"),
+    ("HTMLRev — Free HTML Templates", "https://htmlrev.com/"),
+    ("HTML-Minifier — HTML Minifier", "https://github.com/j9t/html-minifier-next"),
+    ("Markdown to HTML — Converter", "https://markdowntohtml.com/"),
+]
+
+# ── CSS ──
+DT_TOOLS["dtcss"] = [
+    ("Awesome CSS — Resources", "https://github.com/awesome-css-group/awesome-css"),
+    ("CSS Tricks — Snippets", "https://css-tricks.com/snippets/"),
+    ("Easings — Animation Cheat Sheet", "https://easings.net/"),
+    ("Glass UI — Glassmorphism Generator", "https://ui.glass/generator/"),
+    ("CSS Doodle — Pattern Generator", "https://css-doodle.com/"),
+    ("Animista — CSS Animations", "https://animista.net/"),
+    ("CSS Reference — Guide", "https://cssreference.io/"),
+    ("Buttons.cool — Copy CSS Buttons", "https://www.buttons.cool/"),
+    ("Hover.CSS — CSS Hover Effects", "https://ianlunn.github.io/Hover/"),
+    ("Modern CSS — Guide", "https://moderncss.dev/"),
+]
+
+# ── JavaScript ──
+DT_TOOLS["dtjavascript"] = [
+    ("MDN Web Docs — JS Reference", "https://developer.mozilla.org/en-US/docs/Web/JavaScript"),
+    ("JavaScript.info — Modern JS Tutorial", "https://javascript.info/"),
+    ("npm — Package Manager", "https://www.npmjs.com/"),
+]
+
+# ── React ──
+DT_TOOLS["dtreact"] = [
+    ("React — Official Site", "https://react.dev/"),
+    ("Next.js — React Framework", "https://nextjs.org/"),
+    ("React Native — Mobile Framework", "https://reactnative.dev/"),
+]
+
+# ── PHP ──
+DT_TOOLS["dtphp"] = [
+    ("PHP.net — Official Site", "https://www.php.net/"),
+    ("Laravel — PHP Framework", "https://laravel.com/"),
+    ("Composer — PHP Package Manager", "https://getcomposer.org/"),
+]
+
+# ── Web Dev Tools ──
+DT_TOOLS["dtwebdev"] = [
+    ("Wappalyzer — Identify Technologies", "https://www.wappalyzer.com/"),
+    ("shadcn-ui — Web Component Library", "https://ui.shadcn.com/"),
+    ("GoAccess — Web Log Analyzer", "https://goaccess.io/"),
+    ("Selenium — Browser Automation", "https://www.selenium.dev/"),
+    ("PlayWright — Browser Automation", "https://playwright.dev/"),
+    ("Can I Use? — Browser Support Tables", "https://caniuse.com/"),
+    ("Umami — Site Analytics", "https://umami.is/"),
+    ("cURL — HTTP Client / Transfer Data", "https://curl.se/"),
+    ("PocketBase — Open-Source Backend", "https://pocketbase.io/"),
+    ("Caddy — Web Server", "https://caddyserver.com/"),
+    ("Motion — Animation Library", "https://motion.dev/"),
+]
+
+# ── Website Builders ──
+DT_TOOLS["dtwebbuilder"] = [
+    ("Framer — Website Builder", "https://www.framer.com/"),
+    ("Hugo — Static Site Generator", "https://gohugo.io/"),
+    ("Eleventy — Static Site Generator", "https://11ty.dev/"),
+    ("Astro — Static Site Generator", "https://astro.build/"),
+    ("VitePress — Static Site Generator", "https://vitepress.dev/"),
+    ("Docusaurus — Static Markdown Site", "https://docusaurus.io/"),
+    ("Jekyll — Static Markdown Site", "https://jekyllrb.com/"),
+    ("Webstudio — Website Builder", "https://webstudio.is/"),
+    ("Carrd — Simple Website Builder", "https://carrd.co/"),
+    ("Publii — No Coding Static Site", "https://getpublii.com/"),
+]
+
+# ── Color Schemes ──
+DT_TOOLS["dtcolors"] = [
+    ("Palette Generators — FMHY", "https://fmhy.net/image-tools#palette-generators"),
+    ("Color Pickers — FMHY", "https://fmhy.net/image-tools#color-pickers"),
+    ("Coolors — Color Palette Generator", "https://coolors.co/"),
+    ("CSS Gradient — Gradient Generator", "https://cssgradient.io/"),
+]
+
+# ── Frontend Tools ──
+DT_TOOLS["dtfrontend"] = [
+    ("shadcn-ui — Component Library", "https://ui.shadcn.com/"),
+    ("FreeFrontend — Code Snippets", "https://freefrontend.com/"),
+    ("Tailwind CSS — Utility Framework", "https://tailwindcss.com/"),
+    ("Bootstrap — CSS Framework", "https://getbootstrap.com/"),
+]
+
+# ── WordPress Tools ──
+DT_TOOLS["dtwordpress"] = [
+    ("WordPress.org — Official Site", "https://wordpress.org/"),
+    ("Starter Templates — Theme Templates", "https://developer.starter.developer.starter.developer/starter"),
+]
+
+# ── Regex Tools ──
+DT_TOOLS["dtregex"] = [
+    ("regex101 — Regex Tester", "https://regex101.com/"),
+    ("Regexr — Regex Tester / Visualizer", "https://regexr.com/"),
+    ("iHateRegex — Regex Cheat Sheet", "https://ihateregex.io/"),
+]
+
+# ── Benchmark Tools ──
+DT_TOOLS["dtbenchmark"] = [
+    ("Benchmarks Game — Measure PL Speeds", "https://benchmarksgame-team.pages.debian.net/benchmarksgame/"),
+    ("Language Benchmarks — PL Comparisons", "https://programming-language-benchmarks.vercel.app/"),
+]
+
+# ── SVG Tools ──
+DT_TOOLS["dtsvg"] = [
+    ("SVG Repo — Free SVG Icons", "https://www.svgrepo.com/"),
+    ("SVGOMG — SVG Optimizer", "https://jakearchibald.github.io/svgomg/"),
+    ("SVG Path Editor", "https://yqnn.github.io/svg-path-editor/"),
+]
+
+# ── Hosting Tools ──
+DT_TOOLS["dthosting"] = [
+    ("Awesome Web Hosting — Provider Index", "https://nuhmanpk.github.io/Awesome-Web-Hosting/"),
+    ("Oracle Cloud — Free VPS", "https://www.oracle.com/cloud/free/"),
+    ("Uptime Kuma — Uptime Monitor", "https://github.com/louislam/uptime-kuma"),
+    ("Server Hunter — Search / Compare Servers", "https://www.serverhunter.com/"),
+    ("GetDeploying — Compare Cloud Providers", "https://getdeploying.com/"),
+    ("Kener — Self-Hosted Status Page", "https://kener.ing/"),
+    ("Cloudron — Web App Host", "https://www.cloudron.io/"),
+    ("VPS Price Tracker — Compare VPS", "https://vpspricetracker.com/"),
+    ("TLD-List — Domain Price Comparisons", "https://tld-list.com/"),
+    ("OpenPanel — Web Hosting Panel", "https://openpanel.com/"),
+]
+
+# ── Dynamic Page Hosting ──
+DT_TOOLS["dtdynamic"] = [
+    ("Railway — App Hosting", "https://railway.app/"),
+    ("Vercel — App Hosting", "https://vercel.com/"),
+    ("Fly.io — App Hosting", "https://fly.io/"),
+    ("Render — App Hosting", "https://render.com/"),
+    ("Heroku Alternatives — FMHY", "https://rentry.co/Heroku-Alt"),
+]
+
+# ── Static Page Hosting ──
+DT_TOOLS["dtstatic"] = [
+    ("GitHub Pages — Free Static Hosting", "https://pages.github.com/"),
+    ("Netlify — Static Hosting", "https://www.netlify.com/"),
+    ("Cloudflare Pages — Static Hosting", "https://pages.cloudflare.com/"),
+    ("Surge — Static Web Publishing", "https://surge.sh/"),
+]
+
+# ── Cybersecurity Tools ──
+DT_TOOLS["dtcyber"] = [
+    ("Nmap — Network Security Scanner", "https://nmap.org/"),
+    ("osquery — Security Monitor", "https://osquery.io"),
+    ("Nuclei — Vulnerability Scanner", "https://docs.projectdiscovery.io/tools/nuclei"),
+    ("Sniffnet — Network Monitor", "https://www.sniffnet.net/"),
+    ("Crowdsec — Intrusion Detection", "https://crowdsec.net/"),
+    ("Wazuh — Site Security Monitor", "https://wazuh.com/"),
+    ("CVE Details — CVE Search", "https://www.cvedetails.com/"),
+    ("Canarytokens — Network Breach Check", "https://canarytokens.org/generate"),
+    ("Observatory — HTTP Header Security Test", "https://developer.mozilla.org/en-US/observatory"),
+    ("Open Source Security Software", "https://open-source-security-software.net/"),
+]
+
+# ── Cybersecurity Indexes ──
+DT_TOOLS["dtcyberindex"] = [
+    ("Awesome Hacking — Resources", "https://github.com/Hack-with-Github/Awesome-Hacking"),
+    ("NVD — National Vulnerability Database", "https://nvd.nist.gov/"),
+    ("X-Force Exchange — Threat Intelligence", "https://exchange.xforce.ibmcloud.com/"),
+    ("BBRadar — Bug Bounty Tracker", "https://bbradar.io/"),
+]
+
+# ── Pen Testing ──
+DT_TOOLS["dtpentest"] = [
+    ("Kali Linux — Pen Testing OS", "https://www.kali.org/"),
+    ("Parrot OS — Security OS", "https://parrotsec.org/"),
+    ("Metasploit — Pen Testing Framework", "https://www.metasploit.com/"),
+    ("Burp Suite — Web Security Testing", "https://portswigger.net/burp"),
+    ("AllSafe — Intentionally Vulnerable App", "https://github.com/t0thkr1s/allsafe"),
+]
+
+# ── DNS Tools ──
+DT_TOOLS["dtdns"] = [
+    ("Free DNS Resolvers — FMHY", "https://fmhy.net/storage#free-dns-resolvers"),
+    ("DNSTwist — Typosquatting Checker", "https://dnstwist.it/"),
+    ("DNS Perf — Speed Benchmark", "https://dnsperf.com/dns-speed-benchmark"),
+    ("WhoisRequest — Whois Search", "https://whoisrequest.com/"),
+    ("censys — Domain Info Tool", "https://search.censys.io/"),
+]
+
+# ── Web Security ──
+DT_TOOLS["dtwebsec"] = [
+    ("Snyk — Vulnerability Tracking", "https://security.snyk.io/"),
+    ("Greenbone — Vulnerability Management", "https://github.com/greenbone"),
+    ("Evervault — Security Infrastructure", "https://evervault.com/"),
+    ("DarkVisitors — Data Scraper List", "https://darkvisitors.com/"),
+    ("Anubis — Anti-Web Crawler", "https://anubis.techaro.lol/"),
+]
+
+# ── Encryption / Certificates ──
+DT_TOOLS["dtencrypt"] = [
+    ("Let's Encrypt — Free SSL Certificates", "https://letsencrypt.org/"),
+    ("SSL Labs — SSL/TLS Testing", "https://www.ssllabs.com/ssltest/"),
+    ("Keybase — Cryptographic Identity", "https://keybase.io/"),
+    ("age — File Encryption", "https://age-encryption.org/"),
+]
+
+# ── Reverse Engineering ──
+DT_TOOLS["dtreverse"] = [
+    ("Ghidra — NSA Reverse Engineering Tool", "https://ghidra-sre.org/"),
+    ("x64dbg — Open-Source Debugger", "https://x64dbg.com/"),
+    ("Cutter — RE Platform", "https://cutter.re/"),
+    ("DogBolt — Decompiler Explorer", "https://dogbolt.org/"),
+    ("Decompiler — Online Decompiler", "https://www.decompiler.com/"),
+]
+
+_DT_PAGE_SIZE = 8
+
+_DT_MAIN_TEXT = (
+    "🛠️ <b><a href='https://t.me/flauta'>𝓕𝓵𝓪𝓾𝓽𝓪</a> — Developer Tools</b>\n\n"
+    "Your comprehensive guide to developer tools, IDEs, hosting, security, "
+    "and programming resources curated by <a href='https://t.me/flauta'>𝓕𝓵𝓪𝓾𝓽𝓪</a>.\n\n"
+    "📌 <i>Select a category below to explore:</i>"
+)
+
+def _dt_main_kb(page: int = 0):
+    """Build the main Dev Tools menu keyboard (1 column, paginated)."""
+    start = page * _DT_PAGE_SIZE
+    end = start + _DT_PAGE_SIZE
+    cats = _DT_CATEGORIES[start:end]
+    total_pages = (len(_DT_CATEGORIES) + _DT_PAGE_SIZE - 1) // _DT_PAGE_SIZE
+    rows = []
+    for key, emoji, label in cats:
+        rows.append([InlineKeyboardButton(f"{emoji}  {label}", callback_data=f"dt_cat_{key}")])
+    nav = []
+    if page > 0:
+        nav.append(InlineKeyboardButton(f"◀️  Page {page}", callback_data=f"dt_page_{page - 1}"))
+    if page < total_pages - 1:
+        nav.append(InlineKeyboardButton(f"Page {page + 2}  ▶️", callback_data=f"dt_page_{page + 1}"))
+    if nav:
+        rows.append(nav)
+    return InlineKeyboardMarkup(rows)
+
+def _DT_TOOLS_kb(cat_key: str):
+    """Build keyboard for a Dev Tools category showing tools as URL buttons (1 per row)."""
+    tools = DT_TOOLS.get(cat_key, [])
+    rows = []
+    for name, url in tools:
+        rows.append([InlineKeyboardButton(f"{name} 🔗", url=url)])
+    idx = next((i for i, (k, _, _) in enumerate(_DT_CATEGORIES) if k == cat_key), 0)
+    page = idx // _DT_PAGE_SIZE
+    rows.append([InlineKeyboardButton("◀️ Back", callback_data=f"dt_page_{page}")])
+    return InlineKeyboardMarkup(rows)
+
+async def dt_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handle all dt_ callback queries for interactive navigation."""
+    q = update.callback_query
+    await q.answer()
+    data = q.data
+
+    if data == "dt_main" or data == "dt_page_0":
+        await q.edit_message_text(_DT_MAIN_TEXT, reply_markup=_dt_main_kb(0),
+                                  parse_mode="HTML", disable_web_page_preview=True)
+        return
+
+    if data.startswith("dt_page_"):
+        try:
+            page = int(data[len("dt_page_"):])
+        except ValueError:
+            return
+        await q.edit_message_text(_DT_MAIN_TEXT, reply_markup=_dt_main_kb(page),
+                                  parse_mode="HTML", disable_web_page_preview=True)
+        return
+
+    if data.startswith("dt_cat_"):
+        cat_key = data[len("dt_cat_"):]
+        cat = next(((k, e, l) for k, e, l in _DT_CATEGORIES if k == cat_key), None)
+        if not cat:
+            return
+        _, emoji, label = cat
+        tools = DT_TOOLS.get(cat_key, [])
+        if tools:
+            text = f"{emoji} <b>{label}</b>\n\n🔽 <i>Tap a tool to open it:</i>"
+        else:
+            text = f"{emoji} <b>{label}</b>\n\n⏳ <i>Tools coming soon…</i>"
+        await q.edit_message_text(text, reply_markup=_DT_TOOLS_kb(cat_key),
+                                  parse_mode="HTML", disable_web_page_preview=True)
+
+_DT_POST_TARGET = 407
+
+async def dt_post_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user = update.effective_user
+    uname = (user.username or "").lower()
+    uid = user.id
+    if uname not in {"flauta", "gordo"} and uid not in {7032935515}:
+        await update.message.reply_text("⛔ Not authorised.")
+        return ConversationHandler.END
+    await update.message.reply_text(
+        "📌 Where should I post the Developer Tools menu?\n"
+        "Send a Telegram link, e.g.:\n"
+        "<code>https://t.me/c/3786381449/344</code>",
+        parse_mode="HTML",
+    )
+    return _DT_POST_TARGET
+
+async def dt_post_got_target(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    url = update.message.text.strip()
+    chat_id, topic_id = _parse_custommsg_target(url)
+    if chat_id is None:
+        await update.message.reply_text("❌ Invalid link. Try again or /cancel.")
+        return _DT_POST_TARGET
+    try:
+        kwargs = dict(
+            chat_id=chat_id,
+            text=_DT_MAIN_TEXT,
+            reply_markup=_dt_main_kb(0),
+            parse_mode="HTML",
+            disable_web_page_preview=True,
+        )
+        if topic_id:
+            kwargs["message_thread_id"] = topic_id
+        await context.bot.send_message(**kwargs)
+        await update.message.reply_text("✅ Developer Tools menu posted!")
+    except Exception as e:
+        await update.message.reply_text(f"❌ Error: {e}")
+    return ConversationHandler.END
+
+async def dt_post_cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.message.reply_text("❌ Cancelled.")
+    return ConversationHandler.END
+
 # ── main ──────────────────────────────────────────────────────────────────────
 
 def main():
@@ -5969,6 +6689,23 @@ def main():
         per_user=True, per_chat=True,
     ))
     app.add_handler(CallbackQueryHandler(tt_callback, pattern=r"^tt_"))
+
+    # ── Developer Tools interactive menu ──
+    app.add_handler(ConversationHandler(
+        entry_points=[MessageHandler(
+            filters.Regex(r"^/dt_post\b") & filters.ChatType.PRIVATE,
+            dt_post_cmd,
+        )],
+        states={
+            _DT_POST_TARGET: [MessageHandler(
+                filters.TEXT & ~filters.COMMAND & filters.ChatType.PRIVATE,
+                dt_post_got_target,
+            )],
+        },
+        fallbacks=[CommandHandler("cancel", dt_post_cancel)],
+        per_user=True, per_chat=True,
+    ))
+    app.add_handler(CallbackQueryHandler(dt_callback, pattern=r"^dt_"))
 
     # ── Railway.com webhook / local polling ────────────────────────────────
     railway_domain = os.environ.get("RAILWAY_PUBLIC_DOMAIN", "").strip()
