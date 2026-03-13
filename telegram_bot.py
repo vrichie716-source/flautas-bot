@@ -2412,7 +2412,11 @@ _CUSTOMMSG_FORMAT_HELP = (
 
 
 def _apply_custommsg_formatting(text: str) -> tuple[str, list]:
-    """Apply custom formatting tags and extract inline buttons."""
+    """Apply custom formatting tags and extract inline buttons.
+    NOTE: The input is expected to be HTML (from message.text_html),
+    so existing Telegram formatting is already encoded as HTML tags.
+    We only convert the *custom* tags on top of that.
+    """
     def replace_tag(t, tag, open_html, close_html):
         return re.sub(
             rf'<{tag}>(.*?)</?{tag}>',
@@ -2420,29 +2424,41 @@ def _apply_custommsg_formatting(text: str) -> tuple[str, list]:
             t, flags=re.DOTALL | re.IGNORECASE,
         )
 
-    # Extract buttons before processing urls
+    # Extract <button><url>Label(URL)</url></button> inline buttons
     inline_buttons = []
     def _extract_button(m):
-        inline_buttons.append(InlineKeyboardButton(m.group(1).strip(), url=m.group(2)))
+        inline_buttons.append(InlineKeyboardButton(m.group(1).strip(), url=m.group(2).strip()))
         return ''
     text = re.sub(
-        r'<button>\s*<url>([^(<\n]+?)\(([^)\n]+)\)\s*</?url>\s*</?button>',
+        r'&lt;button&gt;\s*&lt;url&gt;([^(<\n]+?)\(([^)\n]+)\)\s*(?:&lt;/?url&gt;)?\s*(?:&lt;/?button&gt;)?',
+        _extract_button, text, flags=re.IGNORECASE,
+    )
+    # Also handle non-escaped version (plain text input)
+    text = re.sub(
+        r'<button>\s*<url>([^(<\n]+?)\(([^)\n]+)\)\s*(?:</?url>)?\s*(?:</?button>)?',
         _extract_button, text, flags=re.IGNORECASE,
     )
 
-    # <url>Label(URL)</url> or <url>Label(URL)<url>
+    # <url>Label(URL)</url> or <url>Label(URL)<url>  (HTML-escaped and plain)
+    text = re.sub(
+        r'&lt;url&gt;([^(<\n]+?)\(([^)\n]+)\)\s*(?:&lt;/?url&gt;)?',
+        lambda m: f'<a href="{m.group(2).strip()}">{m.group(1).strip()}</a>',
+        text, flags=re.IGNORECASE,
+    )
     text = re.sub(
         r'<url>([^(<\n]+?)\(([^)\n]+)\)\s*(?:</?url>)?',
-        lambda m: f'<a href="{m.group(2)}">{m.group(1).strip()}</a>',
+        lambda m: f'<a href="{m.group(2).strip()}">{m.group(1).strip()}</a>',
         text, flags=re.IGNORECASE,
     )
 
+    # Custom formatting tags (both plain and HTML-escaped variants handled)
     text = replace_tag(text, 'bold',       '<b>',          '</b>')
     text = replace_tag(text, 'italic',     '<i>',          '</i>')
     text = replace_tag(text, 'underlined', '<u>',          '</u>')
     text = replace_tag(text, 'strike',     '<s>',          '</s>')
     text = replace_tag(text, 'spoiler',    '<tg-spoiler>', '</tg-spoiler>')
     text = replace_tag(text, 'monospace',  '<code>',       '</code>')
+    text = replace_tag(text, 'quote',      '<blockquote>', '</blockquote>')
 
     return text.strip(), inline_buttons
 
@@ -2489,10 +2505,16 @@ async def custommessage_start(update: Update, context: ContextTypes.DEFAULT_TYPE
 
 
 async def custommessage_got_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Got message body — ask for destination."""
-    context.user_data["custommsg_body"] = update.message.text
+    """Got message body — ask for destination.
+    We use text_html so all pre-existing Telegram formatting (bold, italic,
+    hyperlinks, spoilers, etc.) is preserved exactly as typed.
+    """
+    # text_html includes the HTML encoding of all Telegram entities
+    body_html = update.message.text_html
+    context.user_data["custommsg_body"] = body_html
+    # Preview of formatted message so admin can confirm it looks right
     await update.message.reply_text(
-        "Thank you! 🙏 Where would you like me to post this message?\n\n"
+        "✅ Got it! Where would you like me to post this message?\n\n"
         "<b>Send a link like:</b>\n"
         "  • <code>https://t.me/flautachannel</code>\n"
         "  • <code>https://t.me/c/3786381449/1</code>\n\n"
@@ -2528,7 +2550,12 @@ async def custommessage_got_target(update: Update, context: ContextTypes.DEFAULT
         if pb_match:
             bar, pct = build_progress_bar(secs, total_secs)
             display = display.replace(pb_match.group(0), f"{bar} {pct}%")
-        kwargs = {"chat_id": chat_id, "text": display, "parse_mode": "HTML"}
+        kwargs = {
+            "chat_id": chat_id,
+            "text": display,
+            "parse_mode": "HTML",
+            "disable_web_page_preview": True,
+        }
         if topic_id:
             kwargs["message_thread_id"] = topic_id
         if kb:
@@ -2550,7 +2577,12 @@ async def custommessage_got_target(update: Update, context: ContextTypes.DEFAULT
         )
         await update.message.reply_text("✅ Message sent with live countdown!")
     else:
-        kwargs = {"chat_id": chat_id, "text": body, "parse_mode": "HTML"}
+        kwargs = {
+            "chat_id": chat_id,
+            "text": body,
+            "parse_mode": "HTML",
+            "disable_web_page_preview": True,
+        }
         if topic_id:
             kwargs["message_thread_id"] = topic_id
         if kb:
@@ -2559,7 +2591,7 @@ async def custommessage_got_target(update: Update, context: ContextTypes.DEFAULT
             await context.bot.send_message(**kwargs)
             await update.message.reply_text("✅ Message sent!")
         except TelegramError as e:
-            await update.message.reply_text(f"⚠️ {e}")
+            await update.message.reply_text(f"⚠️ Telegram error: {e}\n\nDouble-check the formatting — raw HTML in your message may have conflicting tags.")
     return ConversationHandler.END
 
 
