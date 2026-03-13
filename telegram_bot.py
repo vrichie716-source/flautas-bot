@@ -17,11 +17,9 @@ import logging
 import os
 import random
 import re
-import threading
 import time
 import uuid
 from datetime import datetime, timezone
-from http.server import HTTPServer, BaseHTTPRequestHandler
 
 import requests
 
@@ -2617,21 +2615,6 @@ async def post_init(application: Application):
             )
 
 
-# ── keep-alive HTTP server (for Render free-tier pinger) ────────────────────
-
-class _HealthHandler(BaseHTTPRequestHandler):
-    def do_GET(self):
-        self.send_response(200)
-        self.end_headers()
-        self.wfile.write(b"OK")
-    def log_message(self, *args):  # suppress request logs
-        pass
-
-def _start_health_server():
-    port = int(os.environ.get("PORT", 10000))
-    server = HTTPServer(("0.0.0.0", port), _HealthHandler)
-    threading.Thread(target=server.serve_forever, daemon=True).start()
-    logger.info("Health server listening on port %s", port)
 
 # ── Flauta Adblocking / Privacy interactive menu ───────────────────────────────
 
@@ -5987,24 +5970,16 @@ def main():
     ))
     app.add_handler(CallbackQueryHandler(tt_callback, pattern=r"^tt_"))
 
-    render_external_url = os.environ.get("RENDER_EXTERNAL_URL", "").strip()
-    url_source = "RENDER_EXTERNAL_URL"
-    if not render_external_url:
-        render_external_hostname = os.environ.get("RENDER_EXTERNAL_HOSTNAME", "").strip()
-        if render_external_hostname:
-            render_external_url = f"https://{render_external_hostname}"
-            url_source = "RENDER_EXTERNAL_HOSTNAME"
-        else:
-            url_source = "none"
-    port = int(os.environ.get("PORT", 10000))
+    # ── Railway.com webhook / local polling ────────────────────────────────
+    railway_domain = os.environ.get("RAILWAY_PUBLIC_DOMAIN", "").strip()
+    port = int(os.environ.get("PORT", 8080))
 
-    if render_external_url:
-        base_url = render_external_url.rstrip("/")
+    if railway_domain:
+        base_url = f"https://{railway_domain}"
         webhook_path = f"webhook/{BOT_TOKEN}"
         webhook_url = f"{base_url}/{webhook_path}"
         logger.info(
-            "Startup mode=WEBHOOK | source=%s | base_url=%s | webhook_url=%s | listen=0.0.0.0:%s",
-            url_source,
+            "Startup mode=WEBHOOK | base_url=%s | webhook_url=%s | listen=0.0.0.0:%s",
             base_url,
             webhook_url,
             port,
@@ -6018,11 +5993,8 @@ def main():
             drop_pending_updates=True,
         )
     else:
-        _start_health_server()
         logger.info(
-            "Startup mode=POLLING | source=%s | PORT=%s | health=0.0.0.0:%s",
-            url_source,
-            port,
+            "Startup mode=POLLING (no RAILWAY_PUBLIC_DOMAIN set) | PORT=%s",
             port,
         )
         app.run_polling(
