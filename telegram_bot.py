@@ -47,7 +47,15 @@ from telegram.error import BadRequest, TelegramError
 # ──────────────────────────────────────────────────────────────────────────────
 # CONFIGURATION — edit these values
 # ──────────────────────────────────────────────────────────────────────────────
-BOT_TOKEN = os.environ.get("BOT_TOKEN", "8478089363:AAGmfJbpjk5xhGXb43x5vRpI4lglb-pz-JE")
+BOT_TOKEN: str = os.environ.get("BOT_TOKEN", "")
+if not BOT_TOKEN:
+    raise ValueError(
+        "BOT_TOKEN environment variable is not set. "
+        "Set it in Railway → Variables before deploying."
+    )
+
+# Bot start time — used by /status for uptime reporting
+_BOT_START_TIME: float = time.time()
 
 # List your group/channel chat IDs (negative numbers for groups/channels)
 # The bot must be an admin with "Invite Users via Link" permission in each one.
@@ -6463,6 +6471,148 @@ async def dt_post_cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("❌ Cancelled.")
     return ConversationHandler.END
 
+# ── /help, /status, /features ─────────────────────────────────────────────────
+
+_HELP_PUBLIC = (
+    "🤖 <b>Flauta's Bot — Command Guide</b>\n\n"
+    "<b>📋 General</b>\n"
+    "  /start — Start the bot / request an invite\n"
+    "  /help — Show this help message\n"
+    "  /features — View planned upcoming features\n\n"
+    "<b>🛡️ Moderation (group admins only)</b>\n"
+    "  /ban /dban /sban /tban /unban\n"
+    "  /mute /dmute /smute /tmute /unmute\n"
+    "  /kick /dkick /skick /kickme\n"
+    "  /promote /demote\n\n"
+    "<b>✅ Approvals</b>\n"
+    "  /approve /unapprove /approved /unapproveall /approval\n\n"
+    "<b>🔒 Blocklist</b>\n"
+    "  /addblocklist /rmblocklist /blocklist\n"
+    "  /blocklistmode /blocklistdelete\n"
+    "  /setblocklistreason /resetblocklistreason /unblocklistall\n\n"
+    "<b>🌐 Federation</b>\n"
+    "  /newfed /joinfed /leavefed\n"
+    "  /fedban /unfedban /fedpromote /feddemote\n"
+    "  /fedadmins /fedinfo /fedchats\n\n"
+    "<b>🌊 Anti-Raid & Flood</b>\n"
+    "  /antiraid /raidtime /raidactiontime /autoantiraid\n"
+    "  /flood /setflood /setfloodtimer /floodmode /clearflood\n\n"
+    "<b>ℹ️ Info</b>\n"
+    "  /chatid /staff /status\n"
+)
+
+_HELP_ADMIN_EXTRA = (
+    "\n<b>🔑 Superadmin / Bot Admin</b>\n"
+    "  /admin-custommessage — Post a custom formatted message\n"
+    "  /privacy_post — Post Privacy &amp; Adblocking menu\n"
+    "  /ai_post — Post AI Tools menu\n"
+    "  /dl_post — Post Downloading Tools menu\n"
+    "  /tr_post — Post Torrenting Tools menu\n"
+    "  /ft_post — Post File Tools menu\n"
+    "  /it_post — Post Internet Tools menu\n"
+    "  /tt_post — Post Text Tools menu\n"
+    "  /dt_post — Post Developer Tools menu\n"
+    "  /admincache /anonadmin /adminerror\n"
+)
+
+
+async def help_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Show context-aware command guide."""
+    user = update.effective_user
+    chat = update.effective_chat
+    if user is None or chat is None:
+        return
+    is_group = chat.type in ("group", "supergroup")
+    uname = (user.username or "").lower()
+    is_superadmin = uname in SUPERADMIN_USERNAMES or user.id in _superadmin_ids
+    # Check if user is admin in any configured group
+    is_any_admin = is_superadmin
+    if not is_any_admin:
+        for gid in GROUP_IDS:
+            if await is_admin(context.bot, gid, user.id, uname or None):
+                is_any_admin = True
+                break
+
+    text = _HELP_PUBLIC
+    if is_any_admin:
+        text += _HELP_ADMIN_EXTRA
+
+    if is_group:
+        # In groups: send as reply, keep it brief with DM suggestion
+        await update.message.reply_text(
+            text + "\n💬 <i>For the full guide, DM me directly.</i>",
+            parse_mode="HTML",
+        )
+    else:
+        await update.message.reply_text(text, parse_mode="HTML")
+
+
+async def status_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Show live runtime status — superadmins and group admins only."""
+    user = update.effective_user
+    if user is None:
+        return
+    uname = (user.username or "").lower()
+    is_superadmin = uname in SUPERADMIN_USERNAMES or user.id in _superadmin_ids
+    is_any_admin = is_superadmin
+    if not is_any_admin:
+        for gid in GROUP_IDS:
+            if await is_admin(context.bot, gid, user.id, uname or None):
+                is_any_admin = True
+                break
+    if not is_any_admin:
+        await update.message.reply_text("⛔ Admins only.")
+        return
+
+    # Uptime
+    elapsed = time.time() - _BOT_START_TIME
+    hours, rem = divmod(int(elapsed), 3600)
+    mins, secs = divmod(rem, 60)
+    uptime_str = f"{hours}h {mins}m {secs}s"
+
+    # Cache info
+    cached_groups = len(_admin_cache)
+    total_cached_admins = sum(len(v) for v in _admin_cache.values())
+    known_superadmins = len(_superadmin_ids)
+
+    mode = "🪝 Webhook" if os.environ.get("RAILWAY_PUBLIC_DOMAIN") else "🔄 Polling"
+
+    text = (
+        "📊 <b>Bot Status</b>\n\n"
+        f"⏱ <b>Uptime:</b> <code>{uptime_str}</code>\n"
+        f"🌐 <b>Mode:</b> {mode}\n\n"
+        f"👥 <b>Configured groups:</b> {len(GROUP_IDS)}\n"
+        f"💾 <b>Admin-cached groups:</b> {cached_groups} "
+        f"({total_cached_admins} admins cached)\n"
+        f"🔑 <b>Known superadmins:</b> {known_superadmins}\n\n"
+        f"📋 <b>Groups monitored:</b>\n"
+        + "\n".join(f"  • <code>{gid}</code>" for gid in GROUP_IDS)
+    )
+    await update.message.reply_text(text, parse_mode="HTML")
+
+
+async def features_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Show the bot roadmap / planned features."""
+    text = (
+        "🗺️ <b>Flauta's Bot — Feature Roadmap</b>\n\n"
+        "<b>🔜 Coming Soon</b>\n"
+        "  📝 <b>Mod Logs</b> — Forward ban/mute/kick actions to a private "
+        "log channel with context (who, what, when, reason)\n\n"
+        "  📊 <b>Offender Scoring</b> — Track per-user infraction history; "
+        "automatic escalation (warn → mute → ban) after threshold\n\n"
+        "  🤖 <b>Spam Scoring</b> — Heuristic scoring for repeated messages, "
+        "link-dropping, and new-account behaviour with configurable thresholds\n\n"
+        "  📜 <b>Onboarding Rules</b> — Custom rules message auto-sent to "
+        "new members after they pass the captcha, configurable per group\n\n"
+        "  💾 <b>Backup &amp; Restore</b> — Export/import blocklist, fed bans, "
+        "and approved members to JSON for disaster recovery\n\n"
+        "  📅 <b>Daily Digest</b> — Scheduled daily summary posted to a log "
+        "channel: new members, bans, mutes, join requests, BTC price\n\n"
+        "💡 <i>Have an idea? Let a superadmin know!</i>"
+    )
+    await update.message.reply_text(text, parse_mode="HTML")
+
+
 # ── main ──────────────────────────────────────────────────────────────────────
 
 def main():
@@ -6487,10 +6637,16 @@ def main():
     # ── New member welcome + captcha ──
     app.add_handler(ChatMemberHandler(handle_new_member, ChatMemberHandler.CHAT_MEMBER))
 
+    # ── DM / general commands ──
+    app.add_handler(CommandHandler("help",     help_cmd))
+    app.add_handler(CommandHandler("features", features_cmd))
+    app.add_handler(CommandHandler("status",   status_cmd))
+
     # ── Group commands ──
     app.add_handler(CommandHandler("chatid", chatid_cmd))
     app.add_handler(CommandHandler("staff", staff_cmd))
     app.add_handler(CommandHandler("admincache", admincache_cmd))
+
     app.add_handler(CommandHandler("anonadmin", anonadmin_cmd))
     app.add_handler(CommandHandler("adminerror", adminerror_cmd))
     app.add_handler(CommandHandler("promote", promote_cmd))
