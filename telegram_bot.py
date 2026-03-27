@@ -1,5 +1,5 @@
 """
-Telegram Invite Bot — Flauta's Bot
+Telegram Invite Bot — 𝔾𝕠𝕣𝕕𝕠's Bot
 - Shows BTC price from Coinbase
 - Language selection (EN / ES)
 - Math captcha with multiple choice
@@ -8,10 +8,11 @@ Telegram Invite Bot — Flauta's Bot
 - /staff — Show the group staff/team list
 - /chatid — Show the current chat's ID and type (admin only)
 - Service message cleanup — auto-deletes join/leave/pin/title-change messages
-- /privacy_post — Post Flauta Adblocking / Privacy interactive menu
+- /privacy_post — Post 𝔾𝕠𝕣𝕕𝕠 Adblocking / Privacy interactive menu
 """
 
 import asyncio
+import io
 import json
 import logging
 import os
@@ -82,7 +83,7 @@ LINK_EXPIRE_SECONDS = 60        # invite link lifetime
 COUNTDOWN_SECONDS   = 60        # visual countdown duration
 
 # Usernames with full admin privileges everywhere (lowercase, no @)
-SUPERADMIN_USERNAMES = {"flauta", "gordo"}
+SUPERADMIN_USERNAMES = {"gordo"}
 # Superadmin user IDs (always recognised, even before first message)
 _superadmin_ids: set[int] = {7032935515}
 # ──────────────────────────────────────────────────────────────────────────────
@@ -136,6 +137,14 @@ BLOCKLIST_FILE = os.path.join(_DATA_DIR, "blocklist.json")
 APPROVED_FILE = os.path.join(_DATA_DIR, "approved.json")
 ANTIRAID_FILE = os.path.join(_DATA_DIR, "antiraid.json")
 FLOOD_FILE = os.path.join(_DATA_DIR, "flood.json")
+MODLOG_FILE = os.path.join(_DATA_DIR, "modlog.json")
+SCORES_FILE = os.path.join(_DATA_DIR, "scores.json")
+RULES_FILE = os.path.join(_DATA_DIR, "rules.json")
+
+# Offender scoring escalation thresholds
+_SCORE_WARN_THRESHOLD = 3
+_SCORE_MUTE_THRESHOLD = 6
+_SCORE_BAN_THRESHOLD = 10
 
 
 def _load_feds() -> dict:
@@ -245,36 +254,124 @@ def _get_flood(chat_id: int) -> dict:
 _flood_counter: dict[tuple[int, int], list[float]] = {}
 
 
-# ── Warnings persistence ─────────────────────────────────────────────────────
-WARN_FILE = os.path.join(_DATA_DIR, "warnings.json")
-MAX_WARNS = 3  # auto-ban after this many warnings
-
-def _load_warns() -> dict:
-    if os.path.exists(WARN_FILE):
-        with open(WARN_FILE, "r", encoding="utf-8") as f:
+# ── Mod Logs persistence ───────────────────────────────────────────────────────
+# Structure: { "chat_id": "log_channel_id" }
+def _load_modlog() -> dict:
+    if os.path.exists(MODLOG_FILE):
+        with open(MODLOG_FILE, "r", encoding="utf-8") as f:
             return json.load(f)
     return {}
 
-def _save_warns(data: dict):
-    with open(WARN_FILE, "w", encoding="utf-8") as f:
+def _save_modlog(data: dict):
+    with open(MODLOG_FILE, "w", encoding="utf-8") as f:
         json.dump(data, f, indent=2)
 
-def _get_warns(chat_id: int, user_id: int) -> int:
-    data = _load_warns()
-    return data.get(str(chat_id), {}).get(str(user_id), 0)
 
-def _add_warn(chat_id: int, user_id: int) -> int:
-    data = _load_warns()
-    chat = data.setdefault(str(chat_id), {})
-    chat[str(user_id)] = chat.get(str(user_id), 0) + 1
-    _save_warns(data)
-    return chat[str(user_id)]
+# ── Offender Scoring persistence ─────────────────────────────────────────────
+# Structure: { "chat_id": { "user_id": { "score": N, "history": [{action, reason, time}] } } }
+def _load_scores() -> dict:
+    if os.path.exists(SCORES_FILE):
+        with open(SCORES_FILE, "r", encoding="utf-8") as f:
+            return json.load(f)
+    # Migrate old warnings file if it exists, but then we'll save to scores.json
+    if os.path.exists(WARN_FILE):
+        try:
+            with open(WARN_FILE, "r", encoding="utf-8") as f:
+                old = json.load(f)
+                new_data = {}
+                for cid, users in old.items():
+                    new_data[cid] = {}
+                    for uid, count in users.items():
+                        new_data[cid][uid] = {"score": count, "history": []}
+                return new_data
+        except Exception:
+            pass
+    return {}
 
-def _reset_warns(chat_id: int, user_id: int):
-    data = _load_warns()
-    chat = data.get(str(chat_id), {})
-    chat.pop(str(user_id), None)
-    _save_warns(data)
+def _save_scores(data: dict):
+    with open(SCORES_FILE, "w", encoding="utf-8") as f:
+        json.dump(data, f, indent=2)
+
+
+# ── Onboarding Rules persistence ─────────────────────────────────────────────
+# Structure: { "chat_id": "Rules HTML text" }
+def _load_rules() -> dict:
+    if os.path.exists(RULES_FILE):
+        with open(RULES_FILE, "r", encoding="utf-8") as f:
+            return json.load(f)
+    return {}
+
+def _save_rules(data: dict):
+    with open(RULES_FILE, "w", encoding="utf-8") as f:
+        json.dump(data, f, indent=2)
+
+
+# ── Core Mod Logging & Scoring Helpers ────────────────────────────────────────
+
+async def _log_mod_action(
+    bot, chat_id: int, actor, action: str, target, reason: str, duration: str = ""
+):
+    channel_id = _load_modlog().get(str(chat_id))
+    if not channel_id:
+        return
+        
+    target_name = getattr(target, "full_name", str(target))
+    target_id_str = getattr(target, "id", str(target))
+    actor_name = getattr(actor, "full_name", str(actor))
+    actor_id_str = getattr(actor, "id", str(actor))
+    
+    text = (
+        f"🚨 <b>{action}</b>\n"
+        f"<b>Chat:</b> <code>{chat_id}</code>\n"
+        f"<b>Actor:</b> {actor_name} [<code>{actor_id_str}</code>]\n"
+        f"<b>Target:</b> {target_name} [<code>{target_id_str}</code>]\n"
+        f"<b>Reason:</b> {reason or 'No reason provided'}"
+    )
+    if duration:
+        text += f"\n<b>Duration:</b> {duration}"
+    try:
+        await bot.send_message(channel_id, text, parse_mode="HTML", disable_web_page_preview=True)
+    except Exception as e:
+        logger.error(f"Failed to post modlog: {e}")
+
+async def _add_infraction(
+    chat_id: int, target_id: int, action: str, reason: str, actor_id: int, points: int = 1
+) -> tuple[int, list[dict]]:
+    """Records an infraction and returns (new_score, history)."""
+    data = _load_scores()
+    chat_data = data.setdefault(str(chat_id), {})
+    user_data = chat_data.setdefault(str(target_id), {"score": 0, "history": []})
+    
+    user_data["score"] += points
+    user_data["history"].append({
+        "time": time.time(),
+        "action": action,
+        "reason": reason,
+        "actor": actor_id
+    })
+    _save_scores(data)
+    return user_data["score"], user_data["history"]
+
+def _clear_infractions(chat_id: int, target_id: int):
+    data = _load_scores()
+    chat_data = data.get(str(chat_id), {})
+    if str(target_id) in chat_data:
+        del chat_data[str(target_id)]
+        _save_scores(data)
+
+def _get_infractions(chat_id: int, target_id: int) -> tuple[int, list[dict]]:
+    data = _load_scores()
+    user_data = data.get(str(chat_id), {}).get(str(target_id), {"score": 0, "history": []})
+    return user_data["score"], user_data["history"]
+
+async def send_rules(bot, chat_id: int, user_id: int):
+    rules = _load_rules().get(str(chat_id))
+    if not rules:
+        return
+    try:
+        await bot.send_message(user_id, rules, parse_mode="HTML", disable_web_page_preview=True)
+    except Exception:
+        pass  # Silent skip if DM fails
 
 
 # ── helpers ──────────────────────────────────────────────────────────────────
@@ -791,6 +888,9 @@ async def handle_new_member(update: Update, context: ContextTypes.DEFAULT_TYPE):
             except TelegramError:
                 pass
             return
+
+    # Send onboarding rules if configured
+    await send_rules(context.bot, chat_id, user.id)
 
     # Welcome message — only in the main group
     if chat_id != MAIN_GROUP_ID:
@@ -1735,7 +1835,7 @@ async def check_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                         pass
 
                 mode = bl.get("mode", "delete")
-                reason = bl.get("reason", "")
+                reason_bl = bl.get("reason", f"Used blocked word: {w}")
 
                 if mode == "mute":
                     try:
@@ -1743,13 +1843,23 @@ async def check_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                             chat.id, user.id,
                             permissions=ChatPermissions(can_send_messages=False),
                         )
+                        await _log_mod_action(context.bot, chat.id, context.bot, "Auto-Mute (Blocklist)", user.id, reason_bl)
+                        await _add_infraction(chat.id, user.id, "Auto-Mute (Blocklist)", reason_bl, context.bot.id)
                     except TelegramError:
                         pass
                 elif mode == "ban":
                     try:
                         await context.bot.ban_chat_member(chat.id, user.id)
+                        await _log_mod_action(context.bot, chat.id, context.bot, "Auto-Ban (Blocklist)", user.id, reason_bl)
+                        await _add_infraction(chat.id, user.id, "Auto-Ban (Blocklist)", reason_bl, context.bot.id)
                     except TelegramError:
                         pass
+                else:
+                    # Just delete mode
+                    await _log_mod_action(context.bot, chat.id, context.bot, "Auto-Delete (Blocklist)", user.id, reason_bl)
+                    await _add_infraction(chat.id, user.id, "Auto-Delete (Blocklist)", reason_bl, context.bot.id)
+
+                return  # stop checking other words once matched
 
                 if reason:
                     try:
@@ -1836,6 +1946,9 @@ async def ban_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
             text += f"\nReason: {reason}"
         kb = [[InlineKeyboardButton("🔓 Unban", callback_data=f"unban_{target_id}")]]
         await update.message.reply_text(text, parse_mode="HTML", reply_markup=InlineKeyboardMarkup(kb))
+        
+        await _log_mod_action(context.bot, chat.id, update.effective_user, "Ban", target_id, reason)
+        await _add_infraction(chat.id, target_id, "Ban", reason or "No reason", update.effective_user.id)
     except TelegramError as e:
         await update.message.reply_text(f"⚠️ {e}")
 
@@ -1860,6 +1973,9 @@ async def dban_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if reason:
             text += f"\nReason: {reason}"
         await update.message.reply_text(text, parse_mode="HTML")
+        
+        await _log_mod_action(context.bot, chat.id, update.effective_user, "DBan (Ban+Delete)", target_id, reason)
+        await _add_infraction(chat.id, target_id, "DBan", reason or "No reason", update.effective_user.id)
     except TelegramError as e:
         await update.message.reply_text(f"⚠️ {e}")
 
@@ -1878,6 +1994,9 @@ async def sban_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await update.message.delete()
         except TelegramError:
             pass
+            
+        await _log_mod_action(context.bot, chat.id, update.effective_user, "SBan (Silent Ban)", target_id, "Silent action")
+        await _add_infraction(chat.id, target_id, "SBan", "Silent action", update.effective_user.id)
     except TelegramError:
         pass
 
@@ -1904,6 +2023,9 @@ async def tban_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
             f"🔨 User <code>{target_id}</code> banned for <b>{extra}</b>.",
             parse_mode="HTML",
         )
+        
+        await _log_mod_action(context.bot, chat.id, update.effective_user, "TBan (Temp Ban)", target_id, "Temp action", duration=extra)
+        await _add_infraction(chat.id, target_id, "TBan", f"Temp action for {extra}", update.effective_user.id)
     except TelegramError as e:
         await update.message.reply_text(f"⚠️ {e}")
 
@@ -1921,6 +2043,7 @@ async def unban_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(
             f"✅ User <code>{target_id}</code> unbanned.", parse_mode="HTML",
         )
+        await _log_mod_action(context.bot, chat.id, update.effective_user, "Unban", target_id, "Manual unban")
     except TelegramError as e:
         await update.message.reply_text(f"⚠️ {e}")
 
@@ -1963,6 +2086,9 @@ async def mute_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
             text += f"\nReason: {reason}"
         kb = [[InlineKeyboardButton("🔊 Unmute", callback_data=f"unmute_{target_id}")]]
         await update.message.reply_text(text, parse_mode="HTML", reply_markup=InlineKeyboardMarkup(kb))
+        
+        await _log_mod_action(context.bot, chat.id, update.effective_user, "Mute", target_id, reason)
+        await _add_infraction(chat.id, target_id, "Mute", reason or "No reason", update.effective_user.id)
     except TelegramError as e:
         await update.message.reply_text(f"⚠️ {e}")
 
@@ -1989,6 +2115,9 @@ async def dmute_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if reason:
             text += f"\nReason: {reason}"
         await update.message.reply_text(text, parse_mode="HTML")
+        
+        await _log_mod_action(context.bot, chat.id, update.effective_user, "DMute (Mute+Delete)", target_id, reason)
+        await _add_infraction(chat.id, target_id, "DMute", reason or "No reason", update.effective_user.id)
     except TelegramError as e:
         await update.message.reply_text(f"⚠️ {e}")
 
@@ -2115,6 +2244,9 @@ async def kick_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if reason:
             text += f"\nReason: {reason}"
         await update.message.reply_text(text, parse_mode="HTML")
+        
+        await _log_mod_action(context.bot, chat.id, update.effective_user, "Kick", target_id, reason)
+        await _add_infraction(chat.id, target_id, "Kick", reason or "No reason", update.effective_user.id)
     except TelegramError as e:
         await update.message.reply_text(f"⚠️ {e}")
 
@@ -2138,6 +2270,9 @@ async def dkick_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(
             f"👢 User <code>{target_id}</code> kicked &amp; messages deleted.", parse_mode="HTML",
         )
+        
+        await _log_mod_action(context.bot, chat.id, update.effective_user, "DKick (Kick+Delete)", target_id, "Deleted msg trigger")
+        await _add_infraction(chat.id, target_id, "DKick", "Deleted msg trigger", update.effective_user.id)
     except TelegramError as e:
         await update.message.reply_text(f"⚠️ {e}")
 
@@ -2156,6 +2291,9 @@ async def skick_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await update.message.delete()
         except TelegramError:
             pass
+            
+        await _log_mod_action(context.bot, chat.id, update.effective_user, "SKick (Silent Kick)", target_id, "Silent action")
+        await _add_infraction(chat.id, target_id, "SKick", "Silent action", update.effective_user.id)
     except TelegramError:
         pass
 
@@ -2174,56 +2312,286 @@ async def kickme_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(f"⚠️ {e}")
 
 
-# ── .warn (dot command) ──────────────────────────────────────────────────────
+# ── /warn, /infractions, /clearinfractions (Offender Scoring) ────────────────
 
-async def warn_dot_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Handles `.warn` — issue a warning via dot command."""
+async def warn_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Adds an infraction and checks for auto-escalation."""
     if not await _admin_guard(update, context):
         return
-    # Parse text: ".warn" may be followed by args or reply
     msg = update.message
-    text_parts = msg.text.split(maxsplit=1)
-    # If replying, target is the replied user
-    if msg.reply_to_message and msg.reply_to_message.from_user:
-        target_id = msg.reply_to_message.from_user.id
-        reason = text_parts[1] if len(text_parts) > 1 else None
-    else:
-        if len(text_parts) < 2:
-            await msg.reply_text("Usage: .warn &lt;reply|user_id&gt; [reason]", parse_mode="HTML")
-            return
-        parts = text_parts[1].split(maxsplit=1)
-        try:
-            target_id = int(parts[0])
-        except ValueError:
-            await msg.reply_text("Reply to a user or provide a user ID.")
-            return
-        reason = parts[1] if len(parts) > 1 else None
-
     chat = update.effective_chat
-    count = _add_warn(chat.id, target_id)
+    actor = update.effective_user
+    
+    target_id, reason = await _resolve_target(update, context)
+    if not target_id:
+        await msg.reply_text("Usage: /warn &lt;reply|user_id&gt; [reason]", parse_mode="HTML")
+        return
+        
+    try:
+        target_member = await chat.get_member(target_id)
+        target_user = target_member.user
+    except TelegramError:
+        await msg.reply_text("Could not find that user in this chat.")
+        return
 
-    if count >= MAX_WARNS:
-        _reset_warns(chat.id, target_id)
+    score, _ = await _add_infraction(
+        chat.id, target_id, "warn", reason or "No reason", actor.id, points=1
+    )
+    
+    # Check escalation thresholds
+    if score >= _SCORE_BAN_THRESHOLD:
         try:
             await context.bot.ban_chat_member(chat.id, target_id)
-            await msg.reply_text(
-                f"⚠️ User <code>{target_id}</code> has been <b>banned</b> "
-                f"({MAX_WARNS}/{MAX_WARNS} warnings).",
-                parse_mode="HTML",
-            )
+            await msg.reply_text(f"🚨 User {target_user.mention_html()} reached <b>{score} infractions</b> and was <b>BANNED</b>.", parse_mode="HTML")
+            await _log_mod_action(context.bot, chat.id, actor, "Auto-Ban (Threshold)", target_user, reason)
         except TelegramError as e:
-            await msg.reply_text(f"⚠️ Could not ban: {e}")
+            await msg.reply_text(f"⚠️ Reached ban threshold but failed to ban: {e}")
+    elif score >= _SCORE_MUTE_THRESHOLD:
+        try:
+            until = datetime.datetime.now(datetime.timezone.utc) + datetime.timedelta(hours=1)
+            await context.bot.restrict_chat_member(
+                chat.id, target_id, permissions=ChatPermissions(can_send_messages=False), until_date=until
+            )
+            await msg.reply_text(f"🔇 User {target_user.mention_html()} reached <b>{score} infractions</b> and was <b>MUTED</b> for 1 hour.", parse_mode="HTML")
+            await _log_mod_action(context.bot, chat.id, actor, "Auto-Mute 1h (Threshold)", target_user, reason, duration="1h")
+        except TelegramError as e:
+            await msg.reply_text(f"⚠️ Reached mute threshold but failed to mute: {e}")
     else:
-        text = (
-            f"⚠️ User <code>{target_id}</code> warned "
-            f"(<b>{count}/{MAX_WARNS}</b>)."
-        )
+        # Just a warning
+        text = f"⚠️ User {target_user.mention_html()} has been warned (Score: <b>{score}</b>)."
         if reason:
             text += f"\nReason: {reason}"
         await msg.reply_text(text, parse_mode="HTML")
+        await _log_mod_action(context.bot, chat.id, actor, "Warn", target_user, reason)
+
+
+async def infractions_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """View a user's infraction history."""
+    if not await _admin_guard(update, context):
+        return
+    target_id, _ = await _resolve_target(update, context)
+    if not target_id:
+        await update.message.reply_text("Usage: /infractions &lt;reply|user_id&gt;", parse_mode="HTML")
+        return
+    
+    score, history = _get_infractions(update.effective_chat.id, target_id)
+    if not history:
+        await update.message.reply_text(f"User <code>{target_id}</code> has a clean record (Score: 0).", parse_mode="HTML")
+        return
+        
+    lines = [f"📊 <b>Infractions for <code>{target_id}</code></b> (Score: <b>{score}</b>)\n"]
+    for i, inf in enumerate(history[-10:], 1):  # show last 10
+        dt_str = datetime.datetime.fromtimestamp(inf['time'], datetime.timezone.utc).strftime('%Y-%m-%d')
+        lines.append(f"{i}. <b>{inf['action']}</b> ({dt_str}) by <code>{inf['actor']}</code>\n   Reason: {inf['reason']}")
+        
+    if len(history) > 10:
+        lines.append(f"\n<i>...and {len(history)-10} older infractions.</i>")
+        
+    await update.message.reply_text("\n".join(lines), parse_mode="HTML", disable_web_page_preview=True)
+
+
+async def clearinfractions_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Clear a user's infractions."""
+    if not await _admin_guard(update, context):
+        return
+    target_id, _ = await _resolve_target(update, context)
+    if not target_id:
+        await update.message.reply_text("Usage: /clearinfractions &lt;reply|user_id&gt;", parse_mode="HTML")
+        return
+    
+    _clear_infractions(update.effective_chat.id, target_id)
+    await update.message.reply_text(f"✅ Cleared all infractions for <code>{target_id}</code>.", parse_mode="HTML")
+
+# ── /modlog and /setmodlog (Mod Logs) ────────────────────────────────────────
+
+async def setmodlog_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Sets the mod log channel for the current group."""
+    if not await _admin_guard(update, context):
+        return
+    if not context.args:
+        await update.message.reply_text("Usage: /setmodlog &lt;channel_id|off&gt;", parse_mode="HTML")
+        return
+    
+    val = context.args[0]
+    chat_id = update.effective_chat.id
+    data = _load_modlog()
+    
+    if val.lower() == "off":
+        if str(chat_id) in data:
+            del data[str(chat_id)]
+            _save_modlog(data)
+        await update.message.reply_text("✅ Mod logging disabled for this group.")
+        return
+        
+    data[str(chat_id)] = val
+    _save_modlog(data)
+    await update.message.reply_text(f"✅ Mod log channel set to <code>{val}</code>.", parse_mode="HTML")
+
+async def modlog_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not await _admin_guard(update, context):
+        return
+    chat_id = update.effective_chat.id
+    val = _load_modlog().get(str(chat_id))
+    if val:
+        await update.message.reply_text(f"📝 Mod log channel is currently: <code>{val}</code>", parse_mode="HTML")
+    else:
+        await update.message.reply_text("Mod logging is currently OFF. Use /setmodlog &lt;channel_id&gt;.", parse_mode="HTML")
+
+
+# ── /setrules and /rules (Onboarding Rules) ──────────────────────────────────
+
+async def setrules_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not await _admin_guard(update, context):
+        return
+    if not context.args:
+        await update.message.reply_text("Usage: /setrules &lt;your rules text here (HTML supported)&gt;\nUse /setrules off to disable.", parse_mode="HTML")
+        return
+        
+    text = " ".join(context.args)
+    chat_id = update.effective_chat.id
+    data = _load_rules()
+    
+    if text.lower() == "off":
+        if str(chat_id) in data:
+            del data[str(chat_id)]
+            _save_rules(data)
+        await update.message.reply_text("✅ Onboarding rules disabled.")
+        return
+        
+    data[str(chat_id)] = text
+    _save_rules(data)
+    await update.message.reply_text("✅ Onboarding rules updated. New users will receive them via DM after captcha.")
+
+async def rules_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    chat = update.effective_chat
+    if chat.type not in ("group", "supergroup"):
+        await update.message.reply_text("ℹ️ Use this in a group.")
+        return
+    rules = _load_rules().get(str(chat.id))
+    if not rules:
+        await update.message.reply_text("📋 This group hasn't set any onboarding rules yet.")
+        return
+    try:
+        await context.bot.send_message(update.effective_user.id, f"📜 <b>Rules for {chat.title}</b>\n\n{rules}", parse_mode="HTML", disable_web_page_preview=True)
+        await update.message.reply_text("📬 I've sent you the rules in a DM!")
+    except TelegramError:
+        await update.message.reply_text("⚠️ Could not send you a DM. Please message me first and try again.")
+
+
+# ── /backup and /restore (Backup & Restore) ──────────────────────────────────
+
+async def backup_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Exports blocklist, fed bans, and approved list for the current group."""
+    chat = update.effective_chat
+    user = update.effective_user
+    if str(user.id) not in SUPERADMIN_USERNAMES:
+        await update.message.reply_text("⛔ Superadmins only.")
+        return
+    if chat.type not in ("group", "supergroup"):
+        await update.message.reply_text("ℹ️ Use this in a group.")
+        return
+        
+    # Gather data
+    chat_id = str(chat.id)
+    bl = _load_blocklist().get(chat_id, {})
+    antraid = _load_antiraid().get(chat_id, {})
+    flood = _load_flood().get(chat_id, {})
+    approved = _load_approved().get(chat_id, [])
+    
+    fed_id, fed = _get_fed_for_chat(chat.id)
+    fed_bans = fed.get("bans", {}) if fed else {}
+    
+    export_data = {
+        "chat_id": chat.id,
+        "chat_title": chat.title,
+        "exported_at": datetime.datetime.now(datetime.timezone.utc).isoformat(),
+        "blocklist": bl,
+        "antiraid": antraid,
+        "flood": flood,
+        "approved": approved,
+        "fed_bans": fed_bans
+    }
+    
+    json_str = json.dumps(export_data, indent=2)
+    with io.BytesIO(json_str.encode("utf-8")) as f:
+        f.name = f"backup_{chat.id}.json"
+        await update.message.reply_document(f, caption=f"💾 Backup for <b>{chat.title}</b>", parse_mode="HTML")
+
+async def restore_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Imports backup JSON data."""
+    chat = update.effective_chat
+    user = update.effective_user
+    if str(user.id) not in SUPERADMIN_USERNAMES:
+        await update.message.reply_text("⛔ Superadmins only.")
+        return
+    if chat.type not in ("group", "supergroup"):
+        await update.message.reply_text("ℹ️ Use this in a group.")
+        return
+    
+    msg = update.message
+    if not msg.reply_to_message or not msg.reply_to_message.document:
+        await msg.reply_text("⚠️ Please reply to a valid JSON backup document with /restore.")
+        return
+        
+    doc = msg.reply_to_message.document
+    if not doc.file_name.endswith(".json"):
+        await msg.reply_text("⚠️ That doesn't look like a JSON file.")
+        return
+        
+    try:
+        file = await context.bot.get_file(doc.file_id)
+        byte_arr = await file.download_as_bytearray()
+        data = json.loads(byte_arr.decode("utf-8"))
+    except Exception as e:
+        await msg.reply_text(f"❌ Failed to parse backup file: {e}")
+        return
+        
+    chat_id = str(chat.id)
+    updates = []
+    
+    # Restore blocklist
+    if "blocklist" in data:
+        bl_data = _load_blocklist()
+        bl_data[chat_id] = data["blocklist"]
+        _save_blocklist(bl_data)
+        updates.append("Blocklist")
+        
+    # Restore antiraid
+    if "antiraid" in data:
+        ar_data = _load_antiraid()
+        ar_data[chat_id] = data["antiraid"]
+        _save_antiraid(ar_data)
+        updates.append("Anti-Raid")
+        
+    # Restore flood
+    if "flood" in data:
+        fl_data = _load_flood()
+        fl_data[chat_id] = data["flood"]
+        _save_flood(fl_data)
+        updates.append("Flood")
+        
+    # Restore approved
+    if "approved" in data:
+        ap_data = _load_approved()
+        ap_data[chat_id] = data["approved"]
+        _save_approved(ap_data)
+        updates.append("Approved List")
+        
+    # Restore Fed Bans if applicable
+    if "fed_bans" in data and data["fed_bans"]:
+        fed_id, fed = _get_fed_for_chat(chat.id)
+        if fed:
+            f_data = _load_feds()
+            f_data["federations"][fed_id]["bans"].update(data["fed_bans"])
+            _save_feds(f_data)
+            updates.append("Fed Bans")
+            
+    await msg.reply_text(f"✅ <b>Restore complete.</b>\nRestored: {', '.join(updates)}", parse_mode="HTML")
+
 
 
 # ── /admin-settings <chat_id> ─────────────────────────────────────────────────
+
 
 def _build_settings_text_and_kb(chat_id: int) -> tuple[str, InlineKeyboardMarkup]:
     """Build the settings panel text and inline keyboard for a chat."""
@@ -2524,7 +2892,7 @@ async def custommessage_got_text(update: Update, context: ContextTypes.DEFAULT_T
     await update.message.reply_text(
         "✅ Got it! Where would you like me to post this message?\n\n"
         "<b>Send a link like:</b>\n"
-        "  • <code>https://t.me/flautachannel</code>\n"
+        "  • <code>https://t.me/gordochannel</code>\n"
         "  • <code>https://t.me/c/3786381449/1</code>\n\n"
         "Send /cancel to abort.",
         parse_mode="HTML",
@@ -2663,10 +3031,10 @@ async def post_init(application: Application):
 
 
 
-# ── Flauta Adblocking / Privacy interactive menu ───────────────────────────────
+# ── 𝔾𝕠𝕣𝕕𝕠 Adblocking / Privacy interactive menu ───────────────────────────────
 
 # Flat category list: (key, emoji, label)
-_FLAUTA_CATEGORIES = [
+_GORDO_CATEGORIES = [
     ("adblock",       "🛡️", "Adblocking"),
     ("adfilters",     "📋", "Adblock Filters"),
     ("dnsblock",      "🌐", "DNS Adblocking"),
@@ -2696,10 +3064,10 @@ _FLAUTA_CATEGORIES = [
 ]
 
 # Tools per category — placeholder empty lists; will be filled later
-FLAUTA_TOOLS: dict[str, list[tuple[str, str]]] = {key: [] for key, _, _ in _FLAUTA_CATEGORIES}
+GORDO_TOOLS: dict[str, list[tuple[str, str]]] = {key: [] for key, _, _ in _GORDO_CATEGORIES}
 
 # ── Adblocking tools ──
-FLAUTA_TOOLS["adblock"] = [
+GORDO_TOOLS["adblock"] = [
     ("uBlock Origin — Adblocker", "https://github.com/gorhill/uBlock"),
     ("uBO Lite (MV3) — Adblocker", "https://github.com/uBlockOrigin/uBOL-home"),
     ("AdGuard — Adblocker", "https://github.com/AdguardTeam/AdguardBrowserExtension"),
@@ -2726,7 +3094,7 @@ FLAUTA_TOOLS["adblock"] = [
 ]
 
 # ── Adblock Filters ──
-FLAUTA_TOOLS["adfilters"] = [
+GORDO_TOOLS["adfilters"] = [
     ("LegitimateURLShortener — Query Param Cleaning", "https://raw.githubusercontent.com/DandelionSprout/adfilt/refs/heads/master/LegitimateURLShortener.txt"),
     ("Hagezi Blocklists — Blocklist Collection", "https://github.com/hagezi/dns-blocklists"),
     ("FilterLists — Filter | Host List Directory", "https://filterlists.com/"),    ("Filterlist — Unsafe Sites Filter", "https://github.com/fmhy/FMHYFilterlist"),
@@ -2735,7 +3103,7 @@ FLAUTA_TOOLS["adfilters"] = [
 ]
 
 # ── DNS Adblocking ──
-FLAUTA_TOOLS["dnsblock"] = [
+GORDO_TOOLS["dnsblock"] = [
     ("DNS Providers — Provider Index", "https://adguard-dns.io/kb/general/dns-providers/"),
     ("Pi-Hole — Self-Hosted DNS Adblocking", "https://pi-hole.net/"),
     ("Pi-Hole Filters", "https://firebog.net/"),
@@ -2764,7 +3132,7 @@ FLAUTA_TOOLS["dnsblock"] = [
 ]
 
 # ── DNS Filters ──
-FLAUTA_TOOLS["dnsfilters"] = [
+GORDO_TOOLS["dnsfilters"] = [
     ("OISD", "https://oisd.nl/"),
     ("hBlock", "https://github.com/hectorm/hblock"),
     ("Hosts File Aggregator", "https://github.com/StevenBlack/hosts"),
@@ -2776,7 +3144,7 @@ FLAUTA_TOOLS["dnsfilters"] = [
 ]
 
 # ── Antivirus | Malware ──
-FLAUTA_TOOLS["antivirus"] = [
+GORDO_TOOLS["antivirus"] = [
     ("Malwarebytes — Antivirus", "https://www.malwarebytes.com/"),
     ("ESET — Antivirus", "https://rentry.co/FMHYB64#eset"),
     ("AdwCleaner — Anti-Adware", "https://www.malwarebytes.com/adwcleaner/"),
@@ -2797,7 +3165,7 @@ FLAUTA_TOOLS["antivirus"] = [
 ]
 
 # ── File Scanners ──
-FLAUTA_TOOLS["filescan"] = [
+GORDO_TOOLS["filescan"] = [
     ("The Second Opinion — Portable Malware Scanner", "https://jijirae.github.io/thesecondopinion/index.html"),
     ("The Second Opinion (mirror)", "https://rentry.co/thesecondopinion"),
     ("VirusTotal — Online File Scanner", "https://www.virustotal.com/"),
@@ -2820,7 +3188,7 @@ FLAUTA_TOOLS["filescan"] = [
 ]
 
 # ── Site Legitimacy Check ──
-FLAUTA_TOOLS["sitelegit"] = [
+GORDO_TOOLS["sitelegit"] = [
     ("URL Void", "https://www.urlvoid.com/"),
     ("URLScan", "https://urlscan.io/"),
     ("Trend Micro — Site Safety", "https://global.sitesafety.trendmicro.com/"),
@@ -2831,7 +3199,7 @@ FLAUTA_TOOLS["sitelegit"] = [
 ]
 
 # ── Privacy ──
-FLAUTA_TOOLS["privacy"] = [
+GORDO_TOOLS["privacy"] = [
     ("Whonix — Privacy-Focused OS", "https://www.whonix.org/"),
     ("Qubes — Privacy-Focused OS", "https://www.qubes-os.org/"),
     ("Tails — Privacy-Focused OS", "https://tails.net/"),
@@ -2860,7 +3228,7 @@ FLAUTA_TOOLS["privacy"] = [
 ]
 
 # ── Privacy Indexes ──
-FLAUTA_TOOLS["privindex"] = [
+GORDO_TOOLS["privindex"] = [
     ("Privacy Guides — Educational Guide", "https://www.privacyguides.org/"),
     ("Surveillance Self-Defense — Educational Guide", "https://ssd.eff.org/"),
     ("The New Oil — Educational Guide", "https://thenewoil.org/"),
@@ -2886,7 +3254,7 @@ FLAUTA_TOOLS["privindex"] = [
 ]
 
 # ── Network Security ──
-FLAUTA_TOOLS["netsec"] = [
+GORDO_TOOLS["netsec"] = [
     ("Safing Portmaster — Network Monitor | Firewall", "https://safing.io/"),    ("I2P — Encrypted Private Network Layer", "https://geti2p.net/en/"),
     ("Simplewall — Firewall", "https://github.com/henrypp/simplewall"),
     ("Fort — Firewall", "https://github.com/tnodir/fort"),
@@ -2894,7 +3262,7 @@ FLAUTA_TOOLS["netsec"] = [
 ]
 
 # ── Web Privacy ──
-FLAUTA_TOOLS["webpriv"] = [
+GORDO_TOOLS["webpriv"] = [
     ("PrivacySpy — Privacy Policy Ratings", "https://privacyspy.org/"),
     ("ToS;DR — Terms of Service Ratings", "https://tosdr.org/"),
     ("JustDeleteMe — Find | Terminate Old Accounts", "https://justdeleteme.xyz/"),    ("No More Google — Google App Alternatives", "https://nomoregoogle.com/"),
@@ -2910,7 +3278,7 @@ FLAUTA_TOOLS["webpriv"] = [
     ("Hyphanet — Browse | Publish Freenet Sites", "https://www.hyphanet.org/"),]
 
 # ── Browser Privacy ──
-FLAUTA_TOOLS["browser"] = [
+GORDO_TOOLS["browser"] = [
     ("Browser Privacy Guides — Setup Guides", "https://www.privacyguides.org/en/desktop-browsers"),
     ("Tor Browser — Onion-Routed Browser", "https://www.torproject.org/"),
     ("Mullvad Browser — Tor Browser Fork", "https://mullvad.net/en/browser"),
@@ -2922,7 +3290,7 @@ FLAUTA_TOOLS["browser"] = [
 ]
 
 # ── Password Privacy / 2FA ──
-FLAUTA_TOOLS["pass2fa"] = [
+GORDO_TOOLS["pass2fa"] = [
     ("2FA Directory — Sites with 2FA Support", "https://2fa.directory/"),
     ("Ente Auth — 2FA | All Platforms", "https://ente.io/auth/"),    ("Aegis — 2FA | Android", "https://getaegis.app/"),    ("Stratum — 2FA | Android", "https://stratumauth.com/"),    ("2FAS — 2FA | Android + iOS", "https://2fas.com/"),    ("Proton Authenticator — 2FA | All Platforms", "https://proton.me/authenticator"),    ("Mauth — 2FA | Android", "https://github.com/X1nto/Mauth"),    ("FreeOTPPlus — 2FA | Android", "https://github.com/helloworld1/FreeOTPPlus"),    ("KeePassXC — 2FA | Desktop", "https://keepassxc.org/"),    ("AuthMe — 2FA | Desktop", "https://authme.levminer.com/"),    ("Yubioath — 2FA | YubiKey Support", "https://developers.yubico.com/yubioath-flutter/"),    ("OTPClient — 2FA | Linux", "https://github.com/paolostivanin/OTPClient"),    ("Sentinel — 2FA | macOS + iOS", "https://getsentinel.io/"),    ("OTP Auth — 2FA | iOS", "https://apps.apple.com/app/otp-auth/id659877384"),    ("Tofu — 2FA | iOS", "https://www.tofuauth.com/"),    ("Authenticator — 2FA Browser Extension", "https://authenticator.cc/"),
     ("2FAuth — Self-Hosted 2FA", "https://docs.2fauth.app/"),
@@ -2932,7 +3300,7 @@ FLAUTA_TOOLS["pass2fa"] = [
 ]
 
 # ── Encrypted Messengers ──
-FLAUTA_TOOLS["encmsg"] = [
+GORDO_TOOLS["encmsg"] = [
     ("Eylenburg Comparisons — Chat App Index", "https://eylenburg.github.io/im_comparison.htm"),
     ("SecuChart — Messenger Comparisons", "https://bkil.gitlab.io/secuchart/"),
     ("Messenger-Matrix — Messenger Comparisons", "https://www.messenger-matrix.de/messenger-matrix-en.html"),
@@ -2945,7 +3313,7 @@ FLAUTA_TOOLS["encmsg"] = [
 ]
 
 # ── Email Privacy ──
-FLAUTA_TOOLS["emailpriv"] = [
+GORDO_TOOLS["emailpriv"] = [
     ("Proton Mail — 1GB Free | Encrypted Email", "https://proton.me/mail"),    ("Disroot — 1GB Free | Encrypted Email", "https://disroot.org/en/services/email"),    ("Tuta — Encrypted Email", "https://tuta.com/"),
     ("DNMX — Onion-Based Email", "https://dnmx.cc/"),
     ("Mailvelope — PGP Encryption for Emails", "https://mailvelope.com/"),
@@ -2954,7 +3322,7 @@ FLAUTA_TOOLS["emailpriv"] = [
 ]
 
 # ── Data Breach Monitoring ──
-FLAUTA_TOOLS["breach"] = [
+GORDO_TOOLS["breach"] = [
     ("Have I Been Pwned? — Monitor Email Breaches", "https://haveibeenpwned.com/"),
     ("F-Secure — Identity Theft Checker", "https://www.f-secure.com/en/identity-theft-checker"),
     ("Have I Been Pwned Passwords — Password Breach Check", "https://haveibeenpwned.com/Passwords"),
@@ -2969,7 +3337,7 @@ FLAUTA_TOOLS["breach"] = [
 ]
 
 # ── Fingerprinting / Tracking ──
-FLAUTA_TOOLS["tracking"] = [
+GORDO_TOOLS["tracking"] = [
     ("CreepJS — Fingerprinting Test", "https://abrahamjuliot.github.io/creepjs"),
     ("webkay — Tracking Test", "https://webkay.robinlinus.com/"),
     ("browserrecon — Browser Fingerprint Scan", "https://www.computec.ch/projekte/browserrecon/?s=scan"),
@@ -2992,7 +3360,7 @@ FLAUTA_TOOLS["tracking"] = [
 ]
 
 # ── Search Engines ──
-FLAUTA_TOOLS["search"] = [
+GORDO_TOOLS["search"] = [
     ("Search Engine Party — Privacy SE Comparisons", "https://searchengine.party/"),
     ("searx.space — SearXNG Instances | Metasearch", "https://searx.space/"),    ("Searx — SearXNG Instance", "https://searx.fmhy.net/"),
     ("Brave Search — Independent Search Engine", "https://search.brave.com/"),
@@ -3007,14 +3375,14 @@ FLAUTA_TOOLS["search"] = [
 ]
 
 # ── VPN ──
-FLAUTA_TOOLS["vpn"] = [
+GORDO_TOOLS["vpn"] = [
     ("Techlore Chart — VPN Comparison Charts", "https://techlore.tech/vpn"),
     ("VPN Relationships — VPN Relationship Map", "https://kumu.io/Windscribe/vpn-relationships"),
     ("Cloudflare One — Free | Unlimited VPN", "https://one.one.one.one/"),    ("Proton VPN — Free | Unlimited VPN", "https://protonvpn.com/"),    ("Windscribe — Free | 10GB Monthly VPN", "https://windscribe.com/"),    ("RiseupVPN — Free | Unlimited VPN", "https://riseup.net/en/vpn"),    ("AirVPN — Paid VPN", "https://airvpn.org/"),
     ("Mullvad VPN — Paid | No-Logging VPN", "https://mullvad.net/"),    ("IVPN — Paid | No-Logging VPN", "https://www.ivpn.net/"),    ("Nym — Paid | 5-Hop Mixnet VPN", "https://nym.com/"),    ("PrivadoVPN — Free | 10GB Monthly VPN", "https://privadovpn.com/freevpn"),    ("Calyx VPN — Free | Unlimited VPN", "https://calyxos.org/docs/guide/apps/calyx-vpn/"),]
 
 # ── VPN Server ──
-FLAUTA_TOOLS["vpnsrv"] = [
+GORDO_TOOLS["vpnsrv"] = [
     ("WireGuard — VPN Tunnel", "https://www.wireguard.com/"),
     ("Tailscale — WireGuard Mesh VPN", "https://tailscale.com/"),
     ("NetBird — WireGuard Mesh VPN", "https://netbird.io/"),
@@ -3037,7 +3405,7 @@ FLAUTA_TOOLS["vpnsrv"] = [
 ]
 
 # ── VPN Tools ──
-FLAUTA_TOOLS["vpntools"] = [
+GORDO_TOOLS["vpntools"] = [
     ("VPN Binding Guide — Bind VPN to Torrent Client", "https://wispydocs.pages.dev/torrenting/"),
     ("WireSock — WireGuard Split Tunneling Client", "https://wiresock.net/"),
     ("Tunnl — WireGuard Split Tunneling Client", "https://tunnl.to/"),
@@ -3046,7 +3414,7 @@ FLAUTA_TOOLS["vpntools"] = [
 ]
 
 # ── Proxy ──
-FLAUTA_TOOLS["proxy"] = [
+GORDO_TOOLS["proxy"] = [
     ("Psiphon — Hybrid Proxy VPN App", "https://psiphon.ca/"),
     ("Lantern — Proxy App", "https://lantern.io/"),
     ("FreeSocks — Shadowsocks App", "https://freesocks.org/"),
@@ -3061,7 +3429,7 @@ FLAUTA_TOOLS["proxy"] = [
 ]
 
 # ── Proxy Servers ──
-FLAUTA_TOOLS["proxysrv"] = [
+GORDO_TOOLS["proxysrv"] = [
     ("Censordex — Proxy Server Setup", "https://censordex.fr.to/"),
     ("3X-UI — Proxy Panel", "https://github.com/MHSanaei/3x-ui"),
     ("Project X — Xray Proxy Core", "https://github.com/XTLS/Xray-core"),
@@ -3079,7 +3447,7 @@ FLAUTA_TOOLS["proxysrv"] = [
 ]
 
 # ── Proxy Clients ──
-FLAUTA_TOOLS["proxycli"] = [
+GORDO_TOOLS["proxycli"] = [
     ("v2rayN — Proxy Client | Windows", "https://github.com/2dust/v2rayN"),    ("NekoBox — Proxy Client | Android", "https://matsuridayo.github.io/"),    ("v2rayNG — Proxy Client | Android", "https://github.com/2dust/v2rayNG"),    ("MahsaNG — Proxy Client | Android", "https://github.com/GFW-knocker/MahsaNG"),    ("Hiddify — Proxy Client | All Platforms", "https://hiddify.com/"),    ("Amnezia — Proxy Client | All Platforms", "https://amnezia.org/"),    ("Shadowsocks — Shadowsocks Client", "https://shadowsocks.org/doc/getting-started.html#gui-clients"),
     ("sing-box — Proxy Client", "https://sing-box.sagernet.org/clients/"),
     ("Throne — Sing-Box GUI Client", "https://throneproj.github.io/"),
@@ -3088,7 +3456,7 @@ FLAUTA_TOOLS["proxycli"] = [
 ]
 
 # ── Anti Censorship ──
-FLAUTA_TOOLS["anticensor"] = [
+GORDO_TOOLS["anticensor"] = [
     ("Censorship Bypass Guide — Full Guide", "https://cbg.fmhy.bid/"),
     ("Net4people — Censorship Circumvention Discussion", "https://github.com/net4people/bbs/issues"),
     ("ByeDPIAndroid — Network Packet Alter | Android", "https://github.com/dovecoteescapee/ByeDPIAndroid"),    ("zapret — Network Packet Alter Tool", "https://github.com/bol-van/zapret"),
@@ -3107,7 +3475,7 @@ FLAUTA_TOOLS["anticensor"] = [
 ]
 
 # ── Proxy Sites ──
-FLAUTA_TOOLS["proxysites"] = [
+GORDO_TOOLS["proxysites"] = [
     ("Holy Unblocker — Web Proxy", "https://holyunblocker.org/"),
     ("Titanium Network — Multi Proxy", "https://titaniumnetwork.org/services/"),
     ("US5 — Multi-Site + App Proxy | Adblocker", "https://us5.thetravelingtourguide.com/"),    ("SSLSecureProxy — Web Proxy", "https://www.sslsecureproxy.com/"),
@@ -3125,83 +3493,83 @@ FLAUTA_TOOLS["proxysites"] = [
     ("Knaben.info — Torrent Site Proxies", "https://knaben.info/"),
 ]
 
-_FLAUTA_PAGE_SIZE = 8   # categories per page (1 column)
+_GORDO_PAGE_SIZE = 8   # categories per page (1 column)
 
-_FLAUTA_MAIN_TEXT = (
-    "🛡️ <b><a href='https://t.me/flauta'>𝓕𝓵𝓪𝓾𝓽𝓪</a> — Adblocking | Privacy</b>\n\n"
+_GORDO_MAIN_TEXT = (
+    "🛡️ <b><a href='https://t.me/gordo'>𝔾𝕠𝕣𝕕𝕠</a> — Adblocking | Privacy</b>\n\n"
     "Your comprehensive guide to online privacy, security, and adblocking tools "
-    "curated by <a href='https://t.me/flauta'>𝓕𝓵𝓪𝓾𝓽𝓪</a>.\n\n"
+    "curated by <a href='https://t.me/gordo'>𝔾𝕠𝕣𝕕𝕠</a>.\n\n"
     "📌 <i>Select a category below to explore:</i>"
 )
 
-def _flauta_main_kb(page: int = 0):
-    """Build the main Flauta menu keyboard (1 column, paginated)."""
-    start = page * _FLAUTA_PAGE_SIZE
-    end = start + _FLAUTA_PAGE_SIZE
-    cats = _FLAUTA_CATEGORIES[start:end]
-    total_pages = (len(_FLAUTA_CATEGORIES) + _FLAUTA_PAGE_SIZE - 1) // _FLAUTA_PAGE_SIZE
+def _gordo_main_kb(page: int = 0):
+    """Build the main 𝔾𝕠𝕣𝕕𝕠 menu keyboard (1 column, paginated)."""
+    start = page * _GORDO_PAGE_SIZE
+    end = start + _GORDO_PAGE_SIZE
+    cats = _GORDO_CATEGORIES[start:end]
+    total_pages = (len(_GORDO_CATEGORIES) + _GORDO_PAGE_SIZE - 1) // _GORDO_PAGE_SIZE
     rows = []
     for key, emoji, label in cats:
-        rows.append([InlineKeyboardButton(f"{emoji}  {label}", callback_data=f"flauta_cat_{key}")])
+        rows.append([InlineKeyboardButton(f"{emoji}  {label}", callback_data=f"gordo_cat_{key}")])
     # Pagination row
     nav = []
     if page > 0:
-        nav.append(InlineKeyboardButton(f"◀️  Page {page}", callback_data=f"flauta_page_{page - 1}"))
+        nav.append(InlineKeyboardButton(f"◀️  Page {page}", callback_data=f"gordo_page_{page - 1}"))
     if page < total_pages - 1:
-        nav.append(InlineKeyboardButton(f"Page {page + 2}  ▶️", callback_data=f"flauta_page_{page + 1}"))
+        nav.append(InlineKeyboardButton(f"Page {page + 2}  ▶️", callback_data=f"gordo_page_{page + 1}"))
     if nav:
         rows.append(nav)
     return InlineKeyboardMarkup(rows)
 
-def _FLAUTA_TOOLS_kb(cat_key: str):
+def _GORDO_TOOLS_kb(cat_key: str):
     """Build keyboard for a category showing tools as URL buttons (1 per row)."""
-    tools = FLAUTA_TOOLS.get(cat_key, [])
+    tools = GORDO_TOOLS.get(cat_key, [])
     rows = []
     for name, url in tools:
         rows.append([InlineKeyboardButton(f"{name} 🔗", url=url)])
     # Determine which page this category is on for the back button
-    idx = next((i for i, (k, _, _) in enumerate(_FLAUTA_CATEGORIES) if k == cat_key), 0)
-    page = idx // _FLAUTA_PAGE_SIZE
-    rows.append([InlineKeyboardButton("◀️ Back", callback_data=f"flauta_page_{page}")])
+    idx = next((i for i, (k, _, _) in enumerate(_GORDO_CATEGORIES) if k == cat_key), 0)
+    page = idx // _GORDO_PAGE_SIZE
+    rows.append([InlineKeyboardButton("◀️ Back", callback_data=f"gordo_page_{page}")])
     return InlineKeyboardMarkup(rows)
 
-async def flauta_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Handle all flauta_ callback queries for interactive navigation."""
+async def gordo_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handle all gordo_ callback queries for interactive navigation."""
     q = update.callback_query
     await q.answer()
     data = q.data
 
-    if data == "flauta_main" or data == "flauta_page_0":
-        await q.edit_message_text(_FLAUTA_MAIN_TEXT, reply_markup=_flauta_main_kb(0),
+    if data == "gordo_main" or data == "gordo_page_0":
+        await q.edit_message_text(_GORDO_MAIN_TEXT, reply_markup=_gordo_main_kb(0),
                                   parse_mode="HTML", disable_web_page_preview=True)
         return
 
-    if data.startswith("flauta_page_"):
+    if data.startswith("gordo_page_"):
         try:
-            page = int(data[len("flauta_page_"):])
+            page = int(data[len("gordo_page_"):])
         except ValueError:
             return
-        await q.edit_message_text(_FLAUTA_MAIN_TEXT, reply_markup=_flauta_main_kb(page),
+        await q.edit_message_text(_GORDO_MAIN_TEXT, reply_markup=_gordo_main_kb(page),
                                   parse_mode="HTML", disable_web_page_preview=True)
         return
 
-    if data.startswith("flauta_cat_"):
-        cat_key = data[len("flauta_cat_"):]
-        cat = next(((k, e, l) for k, e, l in _FLAUTA_CATEGORIES if k == cat_key), None)
+    if data.startswith("gordo_cat_"):
+        cat_key = data[len("gordo_cat_"):]
+        cat = next(((k, e, l) for k, e, l in _GORDO_CATEGORIES if k == cat_key), None)
         if not cat:
             return
         _, emoji, label = cat
-        tools = FLAUTA_TOOLS.get(cat_key, [])
+        tools = GORDO_TOOLS.get(cat_key, [])
         if tools:
             text = f"{emoji} <b>{label}</b>\n\n🔽 <i>Tap a tool to open it:</i>"
         else:
             text = f"{emoji} <b>{label}</b>\n\n⏳ <i>Tools coming soon…</i>"
-        await q.edit_message_text(text, reply_markup=_FLAUTA_TOOLS_kb(cat_key),
+        await q.edit_message_text(text, reply_markup=_GORDO_TOOLS_kb(cat_key),
                                   parse_mode="HTML", disable_web_page_preview=True)
 
-_FLAUTA_POST_TARGET = 400
+_GORDO_POST_TARGET = 400
 
-async def flauta_post_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def gordo_post_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Entry point: /privacy_post — ask superadmin where to post the menu."""
     user = update.effective_user
     if not user:
@@ -3220,9 +3588,9 @@ async def flauta_post_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "Or /cancel to abort.",
         parse_mode="HTML",
     )
-    return _FLAUTA_POST_TARGET
+    return _GORDO_POST_TARGET
 
-async def flauta_post_got_target(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def gordo_post_got_target(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Receive the link, parse it and post the menu there."""
     url = (update.message.text or "").strip()
     chat_id, topic_id = _parse_custommsg_target(url)
@@ -3230,12 +3598,12 @@ async def flauta_post_got_target(update: Update, context: ContextTypes.DEFAULT_T
         await update.message.reply_text(
             "⚠️ Couldn't parse that link. Try again or /cancel."
         )
-        return _FLAUTA_POST_TARGET
+        return _GORDO_POST_TARGET
     try:
         kwargs = {
             "chat_id": chat_id,
-            "text": _FLAUTA_MAIN_TEXT,
-            "reply_markup": _flauta_main_kb(0),
+            "text": _GORDO_MAIN_TEXT,
+            "reply_markup": _gordo_main_kb(0),
             "parse_mode": "HTML",
             "disable_web_page_preview": True,
         }
@@ -3245,11 +3613,11 @@ async def flauta_post_got_target(update: Update, context: ContextTypes.DEFAULT_T
         dest = f"{chat_id}" + (f" / topic {topic_id}" if topic_id else "")
         await update.message.reply_text(f"✅ Privacy menu posted to {dest}.")
     except Exception as e:
-        logger.error("flauta_post_got_target error: %s", e)
+        logger.error("gordo_post_got_target error: %s", e)
         await update.message.reply_text(f"❌ Error: {e}")
     return ConversationHandler.END
 
-async def flauta_post_cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def gordo_post_cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("❌ Cancelled.")
     return ConversationHandler.END
 
@@ -3694,9 +4062,9 @@ AI_TOOLS["aiml"] = [
 _AI_PAGE_SIZE = 8   # categories per page (1 column)
 
 _AI_MAIN_TEXT = (
-    "🤖 <b><a href='https://t.me/flauta'>𝓕𝓵𝓪𝓾𝓽𝓪</a> — Artificial Intelligence | Chatbots | Tools</b>\n\n"
+    "🤖 <b><a href='https://t.me/gordo'>𝔾𝕠𝕣𝕕𝕠</a> — Artificial Intelligence | Chatbots | Tools</b>\n\n"
     "Your comprehensive guide to AI chatbots, image generators, and tools "
-    "curated by <a href='https://t.me/flauta'>𝓕𝓵𝓪𝓾𝓽𝓪</a>.\n\n"
+    "curated by <a href='https://t.me/gordo'>𝔾𝕠𝕣𝕕𝕠</a>.\n\n"
     "📌 <i>Select a category below to explore:</i>"
 )
 
@@ -3769,7 +4137,7 @@ async def ai_post_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
     uname = (user.username or "").lower()
     uid = user.id
-    if uname not in {"flauta", "gordo"} and uid not in {7032935515}:
+    if uname not in {"gordo"} and uid not in {7032935515}:
         await update.message.reply_text("⛔ Not authorised.")
         return ConversationHandler.END
     await update.message.reply_text(
@@ -4006,9 +4374,9 @@ DL_TOOLS["dldebrid"] = [
 _DL_PAGE_SIZE = 8   # categories per page (1 column)
 
 _DL_MAIN_TEXT = (
-    "⬇️ <b><a href='https://t.me/flauta'>𝓕𝓵𝓪𝓾𝓽𝓪</a> — Downloading | Software | Open Directories</b>\n\n"
+    "⬇️ <b><a href='https://t.me/gordo'>𝔾𝕠𝕣𝕕𝕠</a> — Downloading | Software | Open Directories</b>\n\n"
     "Your comprehensive guide to download sites, software repositories, and tools "
-    "curated by <a href='https://t.me/flauta'>𝓕𝓵𝓪𝓾𝓽𝓪</a>.\n\n"
+    "curated by <a href='https://t.me/gordo'>𝔾𝕠𝕣𝕕𝕠</a>.\n\n"
     "📌 <i>Select a category below to explore:</i>"
 )
 
@@ -4081,7 +4449,7 @@ async def dl_post_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
     uname = (user.username or "").lower()
     uid = user.id
-    if uname not in {"flauta", "gordo"} and uid not in {7032935515}:
+    if uname not in {"gordo"} and uid not in {7032935515}:
         await update.message.reply_text("⛔ Not authorised.")
         return ConversationHandler.END
     await update.message.reply_text(
@@ -4243,9 +4611,9 @@ TR_TOOLS["trhelp"] = [
 _TR_PAGE_SIZE = 8
 
 _TR_MAIN_TEXT = (
-    "🧲 <b><a href='https://t.me/flauta'>𝓕𝓵𝓪𝓾𝓽𝓪</a> — Torrenting | Clients | Sites | Trackers</b>\n\n"
+    "🧲 <b><a href='https://t.me/gordo'>𝔾𝕠𝕣𝕕𝕠</a> — Torrenting | Clients | Sites | Trackers</b>\n\n"
     "Your comprehensive guide to torrent clients, sites, and tools "
-    "curated by <a href='https://t.me/flauta'>𝓕𝓵𝓪𝓾𝓽𝓪</a>.\n\n"
+    "curated by <a href='https://t.me/gordo'>𝔾𝕠𝕣𝕕𝕠</a>.\n\n"
     "📌 <i>Select a category below to explore:</i>"
 )
 
@@ -4318,7 +4686,7 @@ async def tr_post_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
     uname = (user.username or "").lower()
     uid = user.id
-    if uname not in {"flauta", "gordo"} and uid not in {7032935515}:
+    if uname not in {"gordo"} and uid not in {7032935515}:
         await update.message.reply_text("⛔ Not authorised.")
         return ConversationHandler.END
     await update.message.reply_text(
@@ -4657,9 +5025,9 @@ FT_TOOLS["ftmega"] = [
 _FT_PAGE_SIZE = 8
 
 _FT_MAIN_TEXT = (
-    "📁 <b><a href='https://t.me/flauta'>𝓕𝓵𝓪𝓾𝓽𝓪</a> — File Tools | PDF | Transfer | Cloud</b>\n\n"
+    "📁 <b><a href='https://t.me/gordo'>𝔾𝕠𝕣𝕕𝕠</a> — File Tools | PDF | Transfer | Cloud</b>\n\n"
     "Your comprehensive guide to file utilities, managers, converters, PDF tools, "
-    "transfer tools, and cloud resources curated by <a href='https://t.me/flauta'>𝓕𝓵𝓪𝓾𝓽𝓪</a>.\n\n"
+    "transfer tools, and cloud resources curated by <a href='https://t.me/gordo'>𝔾𝕠𝕣𝕕𝕠</a>.\n\n"
     "📌 <i>Select a category below to explore:</i>"
 )
 
@@ -4732,7 +5100,7 @@ async def ft_post_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
     uname = (user.username or "").lower()
     uid = user.id
-    if uname not in {"flauta", "gordo"} and uid not in {7032935515}:
+    if uname not in {"gordo"} and uid not in {7032935515}:
         await update.message.reply_text("⛔ Not authorised.")
         return ConversationHandler.END
     await update.message.reply_text(
@@ -5183,10 +5551,10 @@ IT_TOOLS["ittelegram"] = [
 _IT_PAGE_SIZE = 8
 
 _IT_MAIN_TEXT = (
-    "🌍 <b><a href='https://t.me/flauta'>𝓕𝓵𝓪𝓾𝓽𝓪</a> — Internet Tools | Search | URL | Email</b>\n\n"
+    "🌍 <b><a href='https://t.me/gordo'>𝔾𝕠𝕣𝕕𝕠</a> — Internet Tools | Search | URL | Email</b>\n\n"
     "A massive index of internet utilities: network tests, search engines, URL tools, "
     "email helpers, privacy tools, VPN/proxy resources, and social search resources curated by "
-    "<a href='https://t.me/flauta'>𝓕𝓵𝓪𝓾𝓽𝓪</a>.\n\n"
+    "<a href='https://t.me/gordo'>𝔾𝕠𝕣𝕕𝕠</a>.\n\n"
     "📌 <i>Select a category below to explore:</i>"
 )
 
@@ -5259,7 +5627,7 @@ async def it_post_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
     uname = (user.username or "").lower()
     uid = user.id
-    if uname not in {"flauta", "gordo"} and uid not in {7032935515}:
+    if uname not in {"gordo"} and uid not in {7032935515}:
         await update.message.reply_text("⛔ Not authorised.")
         return ConversationHandler.END
     await update.message.reply_text(
@@ -5639,9 +6007,9 @@ TT_TOOLS["ttunicodegen"] = [
 _TT_PAGE_SIZE = 8
 
 _TT_MAIN_TEXT = (
-    "🧾 <b><a href='https://t.me/flauta'>𝓕𝓵𝓪𝓾𝓽𝓪</a> — Text Tools | Editors | Markup | Fonts</b>\n\n"
+    "🧾 <b><a href='https://t.me/gordo'>𝔾𝕠𝕣𝕕𝕠</a> — Text Tools | Editors | Markup | Fonts</b>\n\n"
     "Your complete text toolkit: pastebins, translators, OCR/TTS links, editors, collaboration, "
-    "markdown/latex, and font resources curated by <a href='https://t.me/flauta'>𝓕𝓵𝓪𝓾𝓽𝓪</a>.\n\n"
+    "markdown/latex, and font resources curated by <a href='https://t.me/gordo'>𝔾𝕠𝕣𝕕𝕠</a>.\n\n"
     "📌 <i>Select a category below to explore:</i>"
 )
 
@@ -5714,7 +6082,7 @@ async def tt_post_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
     uname = (user.username or "").lower()
     uid = user.id
-    if uname not in {"flauta", "gordo"} and uid not in {7032935515}:
+    if uname not in {"gordo"} and uid not in {7032935515}:
         await update.message.reply_text("⛔ Not authorised.")
         return ConversationHandler.END
     await update.message.reply_text(
@@ -6359,9 +6727,9 @@ DT_TOOLS["dtreverse"] = [
 _DT_PAGE_SIZE = 8
 
 _DT_MAIN_TEXT = (
-    "🛠️ <b><a href='https://t.me/flauta'>𝓕𝓵𝓪𝓾𝓽𝓪</a> — Developer Tools</b>\n\n"
+    "🛠️ <b><a href='https://t.me/gordo'>𝔾𝕠𝕣𝕕𝕠</a> — Developer Tools</b>\n\n"
     "Your comprehensive guide to developer tools, IDEs, hosting, security, "
-    "and programming resources curated by <a href='https://t.me/flauta'>𝓕𝓵𝓪𝓾𝓽𝓪</a>.\n\n"
+    "and programming resources curated by <a href='https://t.me/gordo'>𝔾𝕠𝕣𝕕𝕠</a>.\n\n"
     "📌 <i>Select a category below to explore:</i>"
 )
 
@@ -6434,7 +6802,7 @@ async def dt_post_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
     uname = (user.username or "").lower()
     uid = user.id
-    if uname not in {"flauta", "gordo"} and uid not in {7032935515}:
+    if uname not in {"gordo"} and uid not in {7032935515}:
         await update.message.reply_text("⛔ Not authorised.")
         return ConversationHandler.END
     await update.message.reply_text(
@@ -6474,7 +6842,7 @@ async def dt_post_cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # ── /help, /status, /features ─────────────────────────────────────────────────
 
 _HELP_PUBLIC = (
-    "🤖 <b>Flauta's Bot — Command Guide</b>\n\n"
+    "🤖 <b>𝔾𝕠𝕣𝕕𝕠's Bot — Command Guide</b>\n\n"
     "<b>📋 General</b>\n"
     "  /start — Start the bot / request an invite\n"
     "  /help — Show this help message\n"
@@ -6594,18 +6962,15 @@ async def status_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def features_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Show the bot roadmap / planned features."""
     text = (
-        "🗺️ <b>Flauta's Bot — Feature Roadmap</b>\n\n"
+        "🗺️ <b>𝔾𝕠𝕣𝕕𝕠's Bot — Feature Roadmap</b>\n\n"
+        "<b>✅ Implemented</b>\n"
+        "  📝 <b>Mod Logs</b> — Forward mod actions to a private log channel with full context (/setmodlog).\n\n"
+        "  📊 <b>Offender Scoring</b> — Track per-user infractions and auto-escalate (warn → mute → ban). (/warn, /infractions)\n\n"
+        "  📜 <b>Onboarding Rules</b> — DMs custom rules to new members automatically. (/setrules)\n\n"
+        "  💾 <b>Backup &amp; Restore</b> — Export/import group data to JSON. (/backup, /restore)\n\n"
         "<b>🔜 Coming Soon</b>\n"
-        "  📝 <b>Mod Logs</b> — Forward ban/mute/kick actions to a private "
-        "log channel with context (who, what, when, reason)\n\n"
-        "  📊 <b>Offender Scoring</b> — Track per-user infraction history; "
-        "automatic escalation (warn → mute → ban) after threshold\n\n"
         "  🤖 <b>Spam Scoring</b> — Heuristic scoring for repeated messages, "
         "link-dropping, and new-account behaviour with configurable thresholds\n\n"
-        "  📜 <b>Onboarding Rules</b> — Custom rules message auto-sent to "
-        "new members after they pass the captcha, configurable per group\n\n"
-        "  💾 <b>Backup &amp; Restore</b> — Export/import blocklist, fed bans, "
-        "and approved members to JSON for disaster recovery\n\n"
         "  📅 <b>Daily Digest</b> — Scheduled daily summary posted to a log "
         "channel: new members, bans, mutes, join requests, BTC price\n\n"
         "💡 <i>Have an idea? Let a superadmin know!</i>"
@@ -6697,11 +7062,19 @@ def main():
         per_user=True, per_chat=True,
     ))
 
-    # ── .warn dot command (matches text starting with ".warn") ──
-    app.add_handler(MessageHandler(
-        filters.Regex(r"^\.warn\b") & filters.ChatType.GROUPS,
-        warn_dot_cmd,
-    ))
+    # ── New Feature Commands ──
+    app.add_handler(CommandHandler("warn", warn_cmd))
+    app.add_handler(CommandHandler("infractions", infractions_cmd))
+    app.add_handler(CommandHandler("clearinfractions", clearinfractions_cmd))
+    
+    app.add_handler(CommandHandler("modlog", modlog_cmd))
+    app.add_handler(CommandHandler("setmodlog", setmodlog_cmd))
+    
+    app.add_handler(CommandHandler("rules", rules_cmd))
+    app.add_handler(CommandHandler("setrules", setrules_cmd))
+    
+    app.add_handler(CommandHandler("backup", backup_cmd))
+    app.add_handler(CommandHandler("restore", restore_cmd))
 
     # ── Federation commands ──
     app.add_handler(CommandHandler("newfed", newfed_cmd))
@@ -6766,22 +7139,22 @@ def main():
     )
     app.add_handler(MessageHandler(service_filter, cleanup_service_message))
 
-    # ── Flauta Privacy interactive menu ──
+    # ── 𝔾𝕠𝕣𝕕𝕠 Privacy interactive menu ──
     app.add_handler(ConversationHandler(
         entry_points=[MessageHandler(
             filters.Regex(r"^/privacy_post\b") & filters.ChatType.PRIVATE,
-            flauta_post_cmd,
+            gordo_post_cmd,
         )],
         states={
-            _FLAUTA_POST_TARGET: [MessageHandler(
+            _GORDO_POST_TARGET: [MessageHandler(
                 filters.TEXT & ~filters.COMMAND & filters.ChatType.PRIVATE,
-                flauta_post_got_target,
+                gordo_post_got_target,
             )],
         },
-        fallbacks=[CommandHandler("cancel", flauta_post_cancel)],
+        fallbacks=[CommandHandler("cancel", gordo_post_cancel)],
         per_user=True, per_chat=True,
     ))
-    app.add_handler(CallbackQueryHandler(flauta_callback, pattern=r"^flauta_"))
+    app.add_handler(CallbackQueryHandler(gordo_callback, pattern=r"^gordo_"))
 
     # ── AI — Artificial Intelligence interactive menu ──
     app.add_handler(ConversationHandler(
