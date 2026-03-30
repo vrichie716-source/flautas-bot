@@ -2822,9 +2822,13 @@ def _apply_custommsg_formatting(text: str, plain_text: str = "") -> tuple[str, l
             label, url = m.group(1).strip(), m.group(2).strip()
             if url:  # only add if we got a real URL
                 inline_buttons.append(InlineKeyboardButton(label, url=url))
-        # Now strip button syntax from the HTML body (both escaped and plain variants)
-        text = _BTN_ESCAPED.sub('', text)
-        text = _BTN_PLAIN.sub('', text)
+        # Strip button syntax from the HTML body.
+        # Use a permissive match (.*?) so that HTML tags such as <a href="...">
+        # embedded inside the button block by PTB's text_html don't break the match.
+        text = re.sub(
+            r'(?:&lt;button&gt;|<button>).*?(?:&lt;/?button&gt;|</?button>)',
+            '', text, flags=re.IGNORECASE | re.DOTALL,
+        )
     else:
         # Fallback: parse directly from the HTML body
         def _extract_button(m):
