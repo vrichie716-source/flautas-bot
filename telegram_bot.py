@@ -2787,11 +2787,13 @@ _CUSTOMMSG_FORMAT_HELP = (
 )
 
 
-def _apply_custommsg_formatting(text: str) -> tuple[str, list]:
+def _apply_custommsg_formatting(text: str, plain_text: str = "") -> tuple[str, list]:
     """Apply custom formatting tags and extract inline buttons.
-    NOTE: The input is expected to be HTML (from message.text_html),
-    so existing Telegram formatting is already encoded as HTML tags.
-    We only convert the *custom* tags on top of that.
+    NOTE: `text` is the HTML version (from message.text_html) — existing Telegram
+    formatting is already encoded as HTML tags and plain `<`/`>` are HTML-escaped.
+    `plain_text` is the raw message.text and is used to reliably extract
+    <button><url>…</button> tags that the admin typed as literal text, since PTB
+    HTML-escapes those angle brackets before we ever see them in `text`.
     """
     def replace_tag(t, tag, open_html, close_html):
         return re.sub(
@@ -2800,20 +2802,36 @@ def _apply_custommsg_formatting(text: str) -> tuple[str, list]:
             t, flags=re.DOTALL | re.IGNORECASE,
         )
 
-    # Extract <button><url>Label(URL)</url></button> inline buttons
-    inline_buttons = []
-    def _extract_button(m):
-        inline_buttons.append(InlineKeyboardButton(m.group(1).strip(), url=m.group(2).strip()))
-        return ''
-    text = re.sub(
-        r'&lt;button&gt;\s*&lt;url&gt;([^(<\n]+?)\(([^)\n]+)\)\s*(?:&lt;/?url&gt;)?\s*(?:&lt;/?button&gt;)?',
-        _extract_button, text, flags=re.IGNORECASE,
-    )
-    # Also handle non-escaped version (plain text input)
-    text = re.sub(
+    # ── Extract inline buttons ──────────────────────────────────────────────
+    # Pattern that matches both <button><url>Label(URL)</url></button> forms:
+    #   - closing tags optional, slash optional (users often omit it)
+    _BTN_PLAIN = re.compile(
         r'<button>\s*<url>([^(<\n]+?)\(([^)\n]+)\)\s*(?:</?url>)?\s*(?:</?button>)?',
-        _extract_button, text, flags=re.IGNORECASE,
+        re.IGNORECASE,
     )
+    _BTN_ESCAPED = re.compile(
+        r'&lt;button&gt;\s*&lt;url&gt;([^(<\n]+?)\(([^)\n]+)\)\s*(?:&lt;/?url&gt;)?\s*(?:&lt;/?button&gt;)?',
+        re.IGNORECASE,
+    )
+
+    inline_buttons = []
+
+    # Step 1: extract from plain text first (most reliable — no HTML-escaping)
+    if plain_text:
+        for m in _BTN_PLAIN.finditer(plain_text):
+            label, url = m.group(1).strip(), m.group(2).strip()
+            if url:  # only add if we got a real URL
+                inline_buttons.append(InlineKeyboardButton(label, url=url))
+        # Now strip button syntax from the HTML body (both escaped and plain variants)
+        text = _BTN_ESCAPED.sub('', text)
+        text = _BTN_PLAIN.sub('', text)
+    else:
+        # Fallback: parse directly from the HTML body
+        def _extract_button(m):
+            inline_buttons.append(InlineKeyboardButton(m.group(1).strip(), url=m.group(2).strip()))
+            return ''
+        text = _BTN_ESCAPED.sub(_extract_button, text)
+        text = _BTN_PLAIN.sub(_extract_button, text)
 
     # <url>Label(URL)</url> or <url>Label(URL)<url>  (HTML-escaped and plain)
     text = re.sub(
@@ -2884,10 +2902,14 @@ async def custommessage_got_text(update: Update, context: ContextTypes.DEFAULT_T
     """Got message body — ask for destination.
     We use text_html so all pre-existing Telegram formatting (bold, italic,
     hyperlinks, spoilers, etc.) is preserved exactly as typed.
+    We also save the plain text so that <button><url>…</button> tags typed
+    literally by the admin are extracted before PTB's HTML-escaping obscures them.
     """
-    # text_html includes the HTML encoding of all Telegram entities
+    # text_html preserves Telegram entities as HTML; text is the raw plain version
     body_html = update.message.text_html
+    body_plain = update.message.text or ""
     context.user_data["custommsg_body"] = body_html
+    context.user_data["custommsg_body_plain"] = body_plain
     # Preview of formatted message so admin can confirm it looks right
     await update.message.reply_text(
         "✅ Got it! Where would you like me to post this message?\n\n"
@@ -2911,7 +2933,8 @@ async def custommessage_got_target(update: Update, context: ContextTypes.DEFAULT
         return _CUSTOMMSG_TARGET
 
     raw_body = context.user_data.pop("custommsg_body", "")
-    body, inline_buttons = _apply_custommsg_formatting(raw_body)
+    raw_plain = context.user_data.pop("custommsg_body_plain", "")
+    body, inline_buttons = _apply_custommsg_formatting(raw_body, raw_plain)
     kb = InlineKeyboardMarkup([inline_buttons]) if inline_buttons else None
 
     cd_match = re.search(r'\{countdown:(\d+)\}', body)
