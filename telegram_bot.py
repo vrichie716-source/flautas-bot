@@ -2770,6 +2770,11 @@ async def admin_settings_callback(update: Update, context: ContextTypes.DEFAULT_
 _CUSTOMMSG_TEXT   = 300
 _CUSTOMMSG_TARGET = 301
 
+# ── /admin-edit conversation states ──────────────────────────────────────────
+_ADMINEDIT_URL     = 310   # waiting for the message URL
+_ADMINEDIT_CONFIRM = 311   # waiting for Yes / No button press
+_ADMINEDIT_NEWTEXT = 312   # waiting for new message body
+
 _CUSTOMMSG_FORMAT_HELP = (
     "👋 Sure! What message would you like me to send?\n\n"
     "<b>Formatting options:</b>\n"
@@ -3002,6 +3007,210 @@ async def custommessage_cancel(update: Update, context: ContextTypes.DEFAULT_TYP
     context.user_data.pop("custommsg_body", None)
     await update.message.reply_text("❌ Cancelled.")
     return ConversationHandler.END
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# /admin-edit — Edit an existing bot message in-place
+# ══════════════════════════════════════════════════════════════════════════════
+
+def _parse_edit_target(url: str) -> tuple:
+    """Parse a Telegram message URL into (chat_id, message_id).
+
+    Supported formats:
+      https://t.me/c/3786381449/1/413   → (-1003786381449, 413)
+      https://t.me/c/3786381449/413     → (-1003786381449, 413)
+    Returns (None, None) on failure.
+    """
+    url = url.strip()
+    # Format with 3 numeric segments: /c/<chat>/<topic>/<msg_id>
+    m = re.match(r'https?://t\.me/c/(\d+)/(\d+)/(\d+)', url)
+    if m:
+        chat_id = int(f"-100{m.group(1)}")
+        msg_id = int(m.group(3))
+        return chat_id, msg_id
+    # Format with 2 numeric segments: /c/<chat>/<msg_id>
+    m = re.match(r'https?://t\.me/c/(\d+)/(\d+)', url)
+    if m:
+        chat_id = int(f"-100{m.group(1)}")
+        msg_id = int(m.group(2))
+        return chat_id, msg_id
+    return None, None
+
+
+async def adminedit_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Entry: /admin-edit [optional URL]"""
+    user = update.effective_user
+    if user is None:
+        return ConversationHandler.END
+    uname = (user.username or "").lower()
+    # Superadmin-only guard
+    if uname in SUPERADMIN_USERNAMES or user.id in _superadmin_ids:
+        _superadmin_ids.add(user.id)
+    else:
+        await update.message.reply_text("⛔ This command is for superadmins only.")
+        return ConversationHandler.END
+
+    # If URL was provided inline (e.g. "/admin-edit https://t.me/c/…"), handle immediately
+    raw = update.message.text or ""
+    parts = raw.split(maxsplit=1)
+    if len(parts) == 2 and parts[1].startswith("http"):
+        return await _adminedit_process_url(update, context, parts[1])
+
+    await update.message.reply_text(
+        "✏️ <b>Edit a bot message</b>\n\n"
+        "Send me the link to the message you want to edit, e.g.:\n"
+        "  • <code>https://t.me/c/3786381449/1/413</code>\n"
+        "  • <code>https://t.me/c/3786381449/413</code>\n\n"
+        "Send /cancel to abort.",
+        parse_mode="HTML",
+    )
+    return _ADMINEDIT_URL
+
+
+async def adminedit_got_url(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Received the message URL — validate and ask for confirmation."""
+    url = (update.message.text or "").strip()
+    return await _adminedit_process_url(update, context, url)
+
+
+async def _adminedit_process_url(update, context, url: str):
+    """Shared logic after we have a URL string."""
+    chat_id, msg_id = _parse_edit_target(url)
+    if chat_id is None:
+        await update.message.reply_text(
+            "⚠️ Couldn't parse that link.\n"
+            "Expected format: <code>https://t.me/c/3786381449/1/413</code>\n"
+            "Try again or /cancel.",
+            parse_mode="HTML",
+        )
+        return _ADMINEDIT_URL
+
+    # Store target for later steps
+    context.user_data["adminedit_chat_id"] = chat_id
+    context.user_data["adminedit_msg_id"] = msg_id
+
+    kb = InlineKeyboardMarkup([[
+        InlineKeyboardButton("✅ Yes, edit this message", callback_data="aedit_yes"),
+        InlineKeyboardButton("❌ No, cancel",            callback_data="aedit_no"),
+    ]])
+    await update.message.reply_text(
+        "🔎 <b>Is this the message you want me to edit?</b>\n\n"
+        f"📢 <b>Chat ID:</b> <code>{chat_id}</code>\n"
+        f"📨 <b>Message ID:</b> <code>{msg_id}</code>\n\n"
+        "<i>Tap Yes to proceed, or No to cancel.</i>",
+        parse_mode="HTML",
+        reply_markup=kb,
+    )
+    return _ADMINEDIT_CONFIRM
+
+
+async def adminedit_confirm_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handle Yes / No confirmation buttons."""
+    query = update.callback_query
+    await query.answer()
+
+    if query.data == "aedit_no":
+        context.user_data.pop("adminedit_chat_id", None)
+        context.user_data.pop("adminedit_msg_id", None)
+        await query.edit_message_text("❌ Edit cancelled.")
+        return ConversationHandler.END
+
+    # aedit_yes
+    await query.edit_message_text(
+        "✅ Got it! Now send me the <b>new text</b> for that message.\n\n"
+        "<b>Formatting options:</b>\n"
+        "  <code>&lt;bold&gt;text&lt;bold&gt;</code> → <b>bold</b>\n"
+        "  <code>&lt;italic&gt;text&lt;italic&gt;</code> → <i>italic</i>\n"
+        "  <code>&lt;underlined&gt;text&lt;underlined&gt;</code> → <u>underlined</u>\n"
+        "  <code>&lt;strike&gt;text&lt;strike&gt;</code> → strikethrough\n"
+        "  <code>&lt;spoiler&gt;text&lt;spoiler&gt;</code> → spoiler\n"
+        "  <code>&lt;monospace&gt;text&lt;monospace&gt;</code> → <code>monospace</code>\n"
+        "  <code>&lt;url&gt;Label(https://...)&lt;url&gt;</code> → hyperlink\n"
+        "  <code>&lt;button&gt;&lt;url&gt;Label(https://)&lt;url&gt;&lt;button&gt;</code> → inline button\n"
+        "  <code>{countdown:60}</code> → live countdown timer\n"
+        "  <code>{progressbar:60}</code> → visual progress bar\n\n"
+        "Send /cancel to abort.",
+        parse_mode="HTML",
+    )
+    return _ADMINEDIT_NEWTEXT
+
+
+async def adminedit_got_newtext(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Received new message body — format and edit the original message."""
+    chat_id = context.user_data.pop("adminedit_chat_id", None)
+    msg_id  = context.user_data.pop("adminedit_msg_id", None)
+
+    if not chat_id or not msg_id:
+        await update.message.reply_text("⚠️ Session expired. Please start over with /admin-edit.")
+        return ConversationHandler.END
+
+    body_html  = update.message.text_html
+    body_plain = update.message.text or ""
+    body, inline_buttons = _apply_custommsg_formatting(body_html, body_plain)
+    kb = InlineKeyboardMarkup([inline_buttons]) if inline_buttons else None
+
+    # Handle countdown / progressbar in edited message
+    cd_match = re.search(r'\{countdown:(\d+)\}', body)
+    pb_match = re.search(r'\{progressbar:(\d+)\}', body)
+    total_secs = int(cd_match.group(1)) if cd_match else (int(pb_match.group(1)) if pb_match else None)
+
+    if total_secs:
+        secs = total_secs
+        display = body
+        if cd_match:
+            display = display.replace(cd_match.group(0), f"⏱ {secs}s")
+        if pb_match:
+            bar, pct = build_progress_bar(secs, total_secs)
+            display = display.replace(pb_match.group(0), f"{bar} {pct}%")
+        try:
+            await context.bot.edit_message_text(
+                chat_id=chat_id,
+                message_id=msg_id,
+                text=display,
+                parse_mode="HTML",
+                disable_web_page_preview=True,
+                reply_markup=kb,
+            )
+        except TelegramError as e:
+            await update.message.reply_text(f"⚠️ Telegram error: {e}")
+            return ConversationHandler.END
+        context.job_queue.run_repeating(
+            _custom_countdown_tick, interval=1, first=1,
+            data={
+                "chat_id": chat_id, "msg_id": msg_id,
+                "body": body,
+                "cd_pattern": cd_match.group(0) if cd_match else None,
+                "pb_pattern": pb_match.group(0) if pb_match else None,
+                "total": total_secs, "secs": total_secs, "kb": kb,
+            },
+        )
+        await update.message.reply_text("✅ Message edited with live countdown!")
+    else:
+        try:
+            await context.bot.edit_message_text(
+                chat_id=chat_id,
+                message_id=msg_id,
+                text=body,
+                parse_mode="HTML",
+                disable_web_page_preview=True,
+                reply_markup=kb,
+            )
+            await update.message.reply_text("✅ Message edited successfully!")
+        except TelegramError as e:
+            await update.message.reply_text(
+                f"⚠️ Telegram error: {e}\n\n"
+                "Make sure the bot is the author of that message, and that the "
+                "formatting is valid."
+            )
+    return ConversationHandler.END
+
+
+async def adminedit_cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    context.user_data.pop("adminedit_chat_id", None)
+    context.user_data.pop("adminedit_msg_id", None)
+    await update.message.reply_text("❌ Edit cancelled.")
+    return ConversationHandler.END
+
 
 
 async def _custom_countdown_tick(context: ContextTypes.DEFAULT_TYPE):
@@ -6899,6 +7108,7 @@ _HELP_PUBLIC = (
 _HELP_ADMIN_EXTRA = (
     "\n<b>🔑 Superadmin / Bot Admin</b>\n"
     "  /admin-custommessage — Post a custom formatted message\n"
+    "  /admin-edit — Edit a previously sent bot message\n"
     "  /privacy_post — Post Privacy &amp; Adblocking menu\n"
     "  /ai_post — Post AI Tools menu\n"
     "  /dl_post — Post Downloading Tools menu\n"
@@ -7086,6 +7296,29 @@ def main():
             )],
         },
         fallbacks=[CommandHandler("cancel", custommessage_cancel)],
+        per_user=True, per_chat=True,
+    ))
+
+    # ── Admin-edit wizard ──
+    app.add_handler(ConversationHandler(
+        entry_points=[MessageHandler(
+            filters.Regex(r"^/admin-edit\b") & filters.ChatType.PRIVATE,
+            adminedit_start,
+        )],
+        states={
+            _ADMINEDIT_URL: [MessageHandler(
+                filters.TEXT & ~filters.COMMAND & filters.ChatType.PRIVATE,
+                adminedit_got_url,
+            )],
+            _ADMINEDIT_CONFIRM: [CallbackQueryHandler(
+                adminedit_confirm_callback, pattern=r"^aedit_(yes|no)$"
+            )],
+            _ADMINEDIT_NEWTEXT: [MessageHandler(
+                filters.TEXT & ~filters.COMMAND & filters.ChatType.PRIVATE,
+                adminedit_got_newtext,
+            )],
+        },
+        fallbacks=[CommandHandler("cancel", adminedit_cancel)],
         per_user=True, per_chat=True,
     ))
 
