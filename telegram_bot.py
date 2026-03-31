@@ -3141,7 +3141,7 @@ async def adminedit_got_newtext(update: Update, context: ContextTypes.DEFAULT_TY
     msg_id  = context.user_data.pop("adminedit_msg_id", None)
 
     if not chat_id or not msg_id:
-        await update.message.reply_text("⚠️ Session expired. Please start over with /admin-edit.")
+        await update.message.reply_text("⚠️ Session expired. Please start over with /admin_edit.")
         return ConversationHandler.END
 
     body_html  = update.message.text_html
@@ -7107,8 +7107,8 @@ _HELP_PUBLIC = (
 
 _HELP_ADMIN_EXTRA = (
     "\n<b>🔑 Superadmin / Bot Admin</b>\n"
-    "  /admin-custommessage — Post a custom formatted message\n"
-    "  /admin-edit — Edit a previously sent bot message\n"
+    "  /admin_custommessage — Post a custom formatted message\n"
+    "  /admin_edit — Edit a previously sent bot message\n"
     "  /privacy_post — Post Privacy &amp; Adblocking menu\n"
     "  /ai_post — Post AI Tools menu\n"
     "  /dl_post — Post Downloading Tools menu\n"
@@ -7282,7 +7282,7 @@ def main():
     # ── Custom message wizard (2-step conversation) ──
     app.add_handler(ConversationHandler(
         entry_points=[MessageHandler(
-            filters.Regex(r"^/admin-custommessage\b") & filters.ChatType.PRIVATE,
+            filters.Regex(r"^/admin_custommessage\b") & filters.ChatType.PRIVATE,
             custommessage_start,
         )],
         states={
@@ -7302,7 +7302,7 @@ def main():
     # ── Admin-edit wizard ──
     app.add_handler(ConversationHandler(
         entry_points=[MessageHandler(
-            filters.Regex(r"^/admin-edit\b") & filters.ChatType.PRIVATE,
+            filters.Regex(r"^/admin_edit\b") & filters.ChatType.PRIVATE,
             adminedit_start,
         )],
         states={
